@@ -32,7 +32,15 @@ jobs:
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+          SHA: ${{ steps.release.outputs.sha }}
         run: |
-          gh api --method POST "/repos/${{ github.repository }}/git/refs" \
-            -f ref="refs/tags/${{ steps.release.outputs.tag_name }}" \
-            -f sha="${{ steps.release.outputs.sha }}"
+          # If the tag already exists (e.g. release-please created it under
+          # GITHUB_TOKEN, which cannot trigger workflows), delete it first, then
+          # recreate it under the PAT so the push event actually starts release.yml.
+          # No release exists for this tag yet, so deleting the ref is safe.
+          gh api --method DELETE "/repos/$REPO/git/refs/tags/$TAG" 2>/dev/null || true
+          gh api --method POST "/repos/$REPO/git/refs" \
+            -f ref="refs/tags/$TAG" \
+            -f sha="$SHA"
