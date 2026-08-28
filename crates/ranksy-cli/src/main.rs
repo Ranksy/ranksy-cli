@@ -1,13 +1,18 @@
-use clap::Parser;
-
+mod cli;
 mod config;
 mod output;
+mod run;
 
-/// Ranksy CLI — run automations against the Ranksy API. An alternative to the MCP server.
-#[derive(Parser)]
-#[command(name = "ranksy", version, about)]
-struct Cli {}
+use clap::Parser;
 
 fn main() {
-    let _ = Cli::parse();
+    let parsed = cli::Cli::parse(); // clap exits 2 on usage error
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    match rt.block_on(run::run(parsed)) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
