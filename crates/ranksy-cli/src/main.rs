@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod config;
+mod output;
 
 /// Ranksy CLI — run automations against the Ranksy API. An alternative to the MCP server.
 #[derive(Parser)]
