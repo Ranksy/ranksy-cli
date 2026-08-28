@@ -1,0 +1,11 @@
+[package]
+name = "ranksy-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ranksy"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
