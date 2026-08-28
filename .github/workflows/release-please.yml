@@ -13,18 +13,26 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Bumps the version, writes the changelog, and opens/merges the release PR.
+      # GITHUB_TOKEN is fine here — this step doesn't need to trigger anything.
       - id: release
         uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Trigger cargo-dist release
+
+      # When the release PR merges, push the git tag so cargo-dist's release.yml
+      # (on: push: tags) builds and publishes the GitHub Release.
+      #
+      # The tag MUST be pushed with a PAT / GitHub App token, not GITHUB_TOKEN:
+      # GitHub blocks events authored by GITHUB_TOKEN from triggering other
+      # workflows, so a GITHUB_TOKEN tag push would silently never start a build.
+      - name: Create release tag
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
-          # Must be a PAT or GitHub App token, NOT GITHUB_TOKEN. GitHub blocks
-          # events authored by the default GITHUB_TOKEN from triggering other
-          # workflows (anti-recursion), so a dispatch made with it silently
-          # no-ops and release.yml never builds. A PAT makes the dispatch fire.
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-        run: gh workflow run release.yml -f tag="${{ steps.release.outputs.tag_name }}"
+        run: |
+          gh api --method POST "/repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/${{ steps.release.outputs.tag_name }}" \
+            -f sha="${{ steps.release.outputs.sha }}"
