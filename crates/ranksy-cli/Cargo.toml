@@ -2,6 +2,8 @@
 name = "ranksy-cli"
 version.workspace = true
 edition.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "ranksy"
