@@ -22,5 +22,9 @@ jobs:
       - name: Trigger cargo-dist release
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Must be a PAT or GitHub App token, NOT GITHUB_TOKEN. GitHub blocks
+          # events authored by the default GITHUB_TOKEN from triggering other
+          # workflows (anti-recursion), so a dispatch made with it silently
+          # no-ops and release.yml never builds. A PAT makes the dispatch fire.
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: gh workflow run release.yml -f tag="${{ steps.release.outputs.tag_name }}"
