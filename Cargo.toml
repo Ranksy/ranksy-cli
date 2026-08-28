@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/ranksy-api", "crates/ranksy-cli"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/ranksy/ranksy-cli"
+description = "Ranksy CLI — run automations against the Ranksy API."
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
