@@ -18,6 +18,7 @@ pub struct Resolved {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Parse variant is part of the public config API
 pub enum ConfigError {
     MissingKey,
     Io(std::io::Error),

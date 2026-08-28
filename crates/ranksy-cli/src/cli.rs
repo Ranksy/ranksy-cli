@@ -46,7 +46,8 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)] pub enum AppsCmd { List }
-#[derive(Subcommand)] pub enum RankingsCmd { Get { #[arg(long)] keyword: Option<String> } }
+#[derive(Subcommand)] pub enum RankingsCmd { Get { /// Filter by keyword (API v1 has no keyword filter yet; this errors until it does).
+    #[arg(long)] keyword: Option<String> } }
 #[derive(Subcommand)] pub enum KeywordsCmd {
     List,
     Track { keyword: String },

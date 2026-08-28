@@ -1,5 +1,5 @@
 use std::process::Command;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn ranksy(server: &str, args: &[&str]) -> std::process::Output {

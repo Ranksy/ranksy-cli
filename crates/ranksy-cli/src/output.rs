@@ -12,6 +12,7 @@ pub struct Column {
     pub key: &'static str,
 }
 
+#[allow(dead_code)] // part of the planned output API; wired when color styles land
 pub fn color_enabled() -> bool {
     use is_terminal::IsTerminal;
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
