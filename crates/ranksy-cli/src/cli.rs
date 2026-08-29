@@ -87,6 +87,12 @@ pub enum Commands {
     Ltv { #[command(subcommand)] cmd: LtvCmd },
     /// Store traffic analytics (BigQuery-backed).
     Traffic { #[command(subcommand)] cmd: TrafficCmd },
+    /// Update ranksy to the latest release (or `--check` to only look).
+    Update {
+        /// Report whether a newer version exists without installing it.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)] pub enum AppsCmd { List }

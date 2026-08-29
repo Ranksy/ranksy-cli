@@ -13,6 +13,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    // self-update needs no API key or app; handle it before auth resolution.
+    if let Commands::Update { check } = &cli.command {
+        return run_update(*check, cli.quiet).await;
+    }
+
     let file = config::load();
     let resolved = config::resolve(
         cli.api_key.clone(),
@@ -51,7 +56,7 @@ async fn dispatch(
     use crate::cli::*;
     let need_app = || app.ok_or_else(|| anyhow!("no app selected. Pass --app <id> or set it in config."));
     let (value, columns) = match command {
-        Commands::Login { .. } => unreachable!("handled earlier"),
+        Commands::Login { .. } | Commands::Update { .. } => unreachable!("handled earlier"),
         Commands::Whoami => (
             client.whoami().await?,
             vec![col("Ulid", "ulid"), col("Slug", "slug"), col("Name", "name")],
@@ -255,4 +260,49 @@ fn push_bool<'a>(q: &mut Vec<(&'a str, String)>, key: &'a str, value: bool) {
 
 fn qref<'a>(q: &'a [(&'a str, String)]) -> Vec<(&'a str, &'a str)> {
     q.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+const INSTALL_HINT: &str = "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ranksy/ranksy-cli/releases/latest/download/ranksy-cli-installer.sh | sh";
+
+/// `ranksy update [--check]`. Uses the install receipt written by the cargo-dist
+/// installer; builds installed another way (e.g. `cargo install`) have no
+/// receipt, so we point the user at the installer instead of failing obscurely.
+async fn run_update(check_only: bool, quiet: bool) -> Result<()> {
+    use axoupdater::AxoUpdater;
+
+    let current = env!("CARGO_PKG_VERSION");
+    let mut updater = AxoUpdater::new_for("ranksy-cli");
+    if updater.load_receipt().is_err() {
+        return Err(anyhow!(
+            "can't self-update: no install receipt found (this build wasn't installed via the release installer).\nInstall or update with:\n  {INSTALL_HINT}"
+        ));
+    }
+
+    if check_only {
+        if updater.is_update_needed().await? {
+            let latest = updater
+                .query_new_version()
+                .await?
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "newer".to_string());
+            println!("Update available: v{latest} (current v{current}). Run `ranksy update`.");
+        } else {
+            println!("Up to date (v{current}).");
+        }
+        return Ok(());
+    }
+
+    match updater.run().await? {
+        Some(result) => {
+            if !quiet {
+                println!("Updated v{current} -> v{}.", result.new_version);
+            }
+        }
+        None => {
+            if !quiet {
+                println!("Already up to date (v{current}).");
+            }
+        }
+    }
+    Ok(())
 }
