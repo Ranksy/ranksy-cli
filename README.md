@@ -17,6 +17,17 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ranksy/ranksy-cli/relea
 Prebuilt static binaries for Linux (musl), macOS, and Windows are published to
 GitHub Releases.
 
+### Update
+
+```bash
+ranksy update          # install the latest release
+ranksy update --check  # report whether a newer version exists, without installing
+```
+
+Self-update works for installer-based installs (it reads the receipt the
+installer writes); if you installed another way, re-run the install command
+above. `ranksy --version` prints the current version.
+
 ## Authenticate
 
 Use the same API key you issue for the Ranksy API v1 in the dashboard
