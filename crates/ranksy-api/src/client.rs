@@ -42,6 +42,17 @@ impl RanksyClient {
         self.send(reqwest::Method::GET, path, query, None).await
     }
 
+    /// Generic GET against `/apps/{app}/{suffix}` with optional query params.
+    /// Backs the analytics-parity commands, which need no per-endpoint typing.
+    pub async fn get_app(
+        &self,
+        app: &str,
+        suffix: &str,
+        query: &[(&str, &str)],
+    ) -> Result<serde_json::Value, ApiError> {
+        self.get(&format!("/apps/{app}/{suffix}"), query).await
+    }
+
     async fn send(
         &self,
         method: reqwest::Method,

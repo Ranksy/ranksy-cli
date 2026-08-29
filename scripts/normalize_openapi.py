@@ -14,6 +14,11 @@ Rules applied:
      parameter schema (progenitor 0.8 emits `Vec::to_string()` for array query
      params and cannot compile them; the CLI wrapper does not use the generated
      methods for these two ops, so generated-client fidelity loss is acceptable)
+  7. spread-placeholder artifacts -> a Resource that returns `['object' => ...,
+     ...$data]` cannot be introspected by Scramble, so it emits a bogus empty-key
+     property `""` and a `null` entry inside `required`. Both are invalid per
+     JSON Schema and make serde reject the doc ("invalid type: null, expected a
+     string"). Drop the `""` property and any non-string `required` entry.
 
 Run after every re-sync of openapi.json from the app's Scramble export:
     python3 scripts/normalize_openapi.py
@@ -36,10 +41,20 @@ def normalize_type(schema: dict) -> None:
         del schema["type"]
 
 
+def clean_spread_placeholders(node: dict) -> None:
+    props = node.get("properties")
+    if isinstance(props, dict) and "" in props:
+        del props[""]
+    required = node.get("required")
+    if isinstance(required, list):
+        node["required"] = [x for x in required if isinstance(x, str)]
+
+
 def walk(node):
     if isinstance(node, dict):
         if "type" in node:
             normalize_type(node)
+        clean_spread_placeholders(node)
         for v in node.values():
             walk(v)
     elif isinstance(node, list):

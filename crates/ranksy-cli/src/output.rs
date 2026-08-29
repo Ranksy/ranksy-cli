@@ -37,14 +37,43 @@ fn cell(v: &serde_json::Value) -> String {
     }
 }
 
+/// Ordered union of object keys across rows. Used when a command supplies no
+/// hand-picked columns (the analytics-parity endpoints), so the table still
+/// reflects whatever fields the API actually returned.
+fn auto_keys(rows: &[serde_json::Value]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for row in rows {
+        if let serde_json::Value::Object(o) = row {
+            for k in o.keys() {
+                if !keys.iter().any(|seen| seen == k) {
+                    keys.push(k.clone());
+                }
+            }
+        }
+    }
+    keys
+}
+
 pub fn render(value: &serde_json::Value, format: Format, columns: &[Column]) -> String {
     match format {
         Format::Json => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
         Format::Table => {
+            let data = rows(value);
             let mut builder = Builder::default();
-            builder.push_record(columns.iter().map(|c| c.header.to_string()));
-            for row in rows(value) {
-                builder.push_record(columns.iter().map(|c| cell(row.get(c.key).unwrap_or(&serde_json::Value::Null))));
+            if columns.is_empty() {
+                let keys = auto_keys(&data);
+                if keys.is_empty() {
+                    return serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+                }
+                builder.push_record(keys.iter().cloned());
+                for row in &data {
+                    builder.push_record(keys.iter().map(|k| cell(row.get(k).unwrap_or(&serde_json::Value::Null))));
+                }
+            } else {
+                builder.push_record(columns.iter().map(|c| c.header.to_string()));
+                for row in &data {
+                    builder.push_record(columns.iter().map(|c| cell(row.get(c.key).unwrap_or(&serde_json::Value::Null))));
+                }
             }
             builder.build().with(Style::rounded()).to_string()
         }
