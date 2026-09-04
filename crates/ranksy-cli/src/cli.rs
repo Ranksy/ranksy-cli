@@ -97,7 +97,7 @@ pub enum Commands {
 
 #[derive(Subcommand)] pub enum AppsCmd { List }
 #[derive(Subcommand)] pub enum RankingsCmd {
-    Get { /// Filter by keyword (API v1 has no keyword filter yet; this errors until it does).
+    Get { /// Narrow the snapshot to one keyword (text or slug); same data as `rankings by-keyword`.
         #[arg(long)] keyword: Option<String> },
     /// Scraped rank rows for a single keyword.
     ByKeyword { keyword: String, #[arg(long)] limit: Option<i64> },

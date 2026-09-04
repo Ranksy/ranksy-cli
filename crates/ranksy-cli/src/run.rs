@@ -70,15 +70,10 @@ async fn dispatch(
                 client.get_rankings(need_app()?, keyword.as_deref()).await?,
                 vec![col("Rank", "rank"), col("Change", "change"), col("Date", "date")],
             ),
-            RankingsCmd::ByKeyword { keyword, limit } => {
-                let mut q: Vec<(&str, String)> = Vec::new();
-                push_int(&mut q, "limit", limit);
-                let qq = qref(&q);
-                (
-                    client.get_app(need_app()?, &format!("rankings/by-keyword/{keyword}"), &qq).await?,
-                    vec![col("Rank", "rank"), col("Change", "change"), col("Date", "date")],
-                )
-            }
+            RankingsCmd::ByKeyword { keyword, limit } => (
+                client.rankings_by_keyword(need_app()?, keyword, *limit).await?,
+                vec![col("Rank", "rank"), col("Change", "change"), col("Date", "date")],
+            ),
         },
         Commands::Keywords { cmd } => match cmd {
             KeywordsCmd::List => (

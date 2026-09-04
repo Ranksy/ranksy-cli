@@ -102,3 +102,17 @@ async fn get_listing_reads_the_listing_endpoint() {
     let v = client.get_listing("app_1").await.unwrap();
     assert_eq!(v["name"], "My App");
 }
+
+#[tokio::test]
+async fn rankings_get_with_keyword_hits_by_keyword_slug() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/apps/app_1/rankings/by-keyword/email-marketing"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"rank": 3}])))
+        .mount(&server)
+        .await;
+
+    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
+    let v = client.get_rankings("app_1", Some("Email Marketing")).await.unwrap();
+    assert_eq!(v[0]["rank"], 3);
+}

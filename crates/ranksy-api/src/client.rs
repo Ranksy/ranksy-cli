@@ -10,8 +10,6 @@ pub enum ApiError {
     Status { code: u16, body: String },
     #[error("client build error: {0}")]
     Build(String),
-    #[error("{0}")]
-    NotImplemented(&'static str),
 }
 
 pub struct ClientConfig {
@@ -100,13 +98,32 @@ impl RanksyClient {
     pub async fn list_apps(&self) -> Result<serde_json::Value, ApiError> {
         self.get("/apps", &[]).await
     }
+    /// Current ranking snapshot for the app. With a keyword, narrows to that one
+    /// keyword via the by-keyword endpoint (the rankings list has no query-param
+    /// filter, but `rankings/by-keyword/{slug}` is the same keyword branch scoped
+    /// to one term).
     pub async fn get_rankings(&self, app: &str, keyword: Option<&str>) -> Result<serde_json::Value, ApiError> {
-        if keyword.is_some() {
-            return Err(ApiError::NotImplemented(
-                "the Ranksy API has no keyword filter on rankings; use `ranksy keywords list` instead",
-            ));
+        if let Some(kw) = keyword {
+            return self.rankings_by_keyword(app, kw, None).await;
         }
         self.get(&format!("/apps/{app}/rankings"), &[]).await
+    }
+    /// Current scraped rank rows for ONE keyword. The endpoint keys on the slug
+    /// (case-insensitive), so slugify the argument — `"Email Marketing"` and
+    /// `email-marketing` both resolve. 404 when the app doesn't track/rank it.
+    pub async fn rankings_by_keyword(
+        &self,
+        app: &str,
+        keyword: &str,
+        limit: Option<i64>,
+    ) -> Result<serde_json::Value, ApiError> {
+        let slug = slugify(keyword);
+        let limit = limit.map(|l| l.to_string());
+        let query: Vec<(&str, &str)> = match &limit {
+            Some(l) => vec![("limit", l.as_str())],
+            None => vec![],
+        };
+        self.get(&format!("/apps/{app}/rankings/by-keyword/{slug}"), &query).await
     }
     pub async fn list_keywords(&self, app: &str) -> Result<serde_json::Value, ApiError> {
         self.get(&format!("/apps/{app}/keywords"), &[]).await
