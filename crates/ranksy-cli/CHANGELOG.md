@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Ranksy/ranksy-cli/compare/v0.4.0...v0.5.0) (2026-09-04)
+
+
+### Features
+
+* keyword track/untrack + listing commands, cwd .env loading ([#7](https://github.com/Ranksy/ranksy-cli/issues/7)) ([2e3320d](https://github.com/Ranksy/ranksy-cli/commit/2e3320d7a71a13d376f012ab48b782605cb26151))
+
 ## [0.4.0](https://github.com/Ranksy/ranksy-cli/compare/v0.3.0...v0.4.0) (2026-08-29)
 
 
