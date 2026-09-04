@@ -11,7 +11,7 @@ file it writes for `ranksy login`.
 ## Install
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ranksy/ranksy-cli/releases/latest/download/ranksy-cli-installer.sh | sh
+curl -LsSf https://ranksyapp.com/cli-installer.sh | sh
 ```
 
 Prebuilt static binaries for Linux (musl), macOS, and Windows are published to
