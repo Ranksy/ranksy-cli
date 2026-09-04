@@ -10,8 +10,6 @@ pub enum ApiError {
     Status { code: u16, body: String },
     #[error("client build error: {0}")]
     Build(String),
-    #[error("{0}")]
-    NotImplemented(&'static str),
 }
 
 pub struct ClientConfig {
@@ -40,6 +38,14 @@ impl RanksyClient {
 
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, ApiError> {
         self.send(reqwest::Method::GET, path, query, None).await
+    }
+
+    async fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        self.send(reqwest::Method::POST, path, &[], Some(body)).await
+    }
+
+    async fn delete(&self, path: &str) -> Result<serde_json::Value, ApiError> {
+        self.send(reqwest::Method::DELETE, path, &[], None).await
     }
 
     /// Generic GET against `/apps/{app}/{suffix}` with optional query params.
@@ -92,22 +98,59 @@ impl RanksyClient {
     pub async fn list_apps(&self) -> Result<serde_json::Value, ApiError> {
         self.get("/apps", &[]).await
     }
+    /// Current ranking snapshot for the app. With a keyword, narrows to that one
+    /// keyword via the by-keyword endpoint (the rankings list has no query-param
+    /// filter, but `rankings/by-keyword/{slug}` is the same keyword branch scoped
+    /// to one term).
     pub async fn get_rankings(&self, app: &str, keyword: Option<&str>) -> Result<serde_json::Value, ApiError> {
-        if keyword.is_some() {
-            return Err(ApiError::NotImplemented(
-                "the Ranksy API has no keyword filter on rankings; use `ranksy keywords list` instead",
-            ));
+        if let Some(kw) = keyword {
+            return self.rankings_by_keyword(app, kw, None).await;
         }
         self.get(&format!("/apps/{app}/rankings"), &[]).await
+    }
+    /// Current scraped rank rows for ONE keyword. The endpoint keys on the slug
+    /// (case-insensitive), so slugify the argument — `"Email Marketing"` and
+    /// `email-marketing` both resolve. 404 when the app doesn't track/rank it.
+    pub async fn rankings_by_keyword(
+        &self,
+        app: &str,
+        keyword: &str,
+        limit: Option<i64>,
+    ) -> Result<serde_json::Value, ApiError> {
+        let slug = slugify(keyword);
+        let limit = limit.map(|l| l.to_string());
+        let query: Vec<(&str, &str)> = match &limit {
+            Some(l) => vec![("limit", l.as_str())],
+            None => vec![],
+        };
+        self.get(&format!("/apps/{app}/rankings/by-keyword/{slug}"), &query).await
     }
     pub async fn list_keywords(&self, app: &str) -> Result<serde_json::Value, ApiError> {
         self.get(&format!("/apps/{app}/keywords"), &[]).await
     }
-    pub async fn track_keyword(&self, _app: &str, _keyword: &str) -> Result<serde_json::Value, ApiError> {
-        Err(ApiError::NotImplemented("keyword tracking has no API v1 endpoint yet"))
+    /// Track one keyword. `POST /apps/{app}/keywords` matches on the keyword
+    /// TEXT server-side, so send the raw keyword — not a slug. 201 when newly
+    /// tracked, 200 on an idempotent re-track; both return the follow row.
+    pub async fn track_keyword(&self, app: &str, keyword: &str) -> Result<serde_json::Value, ApiError> {
+        self.post(
+            &format!("/apps/{app}/keywords"),
+            serde_json::json!({ "keyword": keyword }),
+        )
+        .await
     }
-    pub async fn untrack_keyword(&self, _app: &str, _keyword: &str) -> Result<serde_json::Value, ApiError> {
-        Err(ApiError::NotImplemented("keyword untracking has no API v1 endpoint yet"))
+    /// Untrack one keyword. `DELETE /apps/{app}/keywords/{keyword}` resolves the
+    /// keyword by its SLUG, so slugify the input first: `untrack "Email Marketing"`
+    /// and `untrack email-marketing` both hit `email-marketing`. The endpoint
+    /// 204s with no body, so synthesize a small confirmation for output; a
+    /// keyword that isn't tracked comes back as a 404 status error.
+    pub async fn untrack_keyword(&self, app: &str, keyword: &str) -> Result<serde_json::Value, ApiError> {
+        let slug = slugify(keyword);
+        self.delete(&format!("/apps/{app}/keywords/{slug}")).await?;
+        Ok(serde_json::json!({
+            "object": "untracked_keyword",
+            "keyword": keyword,
+            "slug": slug,
+        }))
     }
     pub async fn list_reviews(&self, app: &str) -> Result<serde_json::Value, ApiError> {
         self.get(&format!("/apps/{app}/reviews"), &[]).await
@@ -115,7 +158,50 @@ impl RanksyClient {
     pub async fn get_installs(&self, app: &str) -> Result<serde_json::Value, ApiError> {
         self.get(&format!("/apps/{app}/installs"), &[]).await
     }
-    pub async fn get_listing(&self, _app: &str) -> Result<serde_json::Value, ApiError> {
-        Err(ApiError::NotImplemented("listing lookup has no API v1 endpoint yet"))
+    pub async fn get_listing(&self, app: &str) -> Result<serde_json::Value, ApiError> {
+        self.get(&format!("/apps/{app}/listing"), &[]).await
+    }
+}
+
+/// Slugify a keyword the way the app does (`Str::slug` for ASCII): lowercase,
+/// every run of non-alphanumerics becomes a single `-`, with no leading or
+/// trailing dash. Idempotent on an existing slug. The API's untrack route keys
+/// on the slug, so this lets a caller pass the human keyword. Edge case: a
+/// keyword whose base slug collided on track carries a sha1 suffix server-side
+/// — untrack it with the exact slug from `keywords list`.
+fn slugify(input: &str) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(c.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn slugify_lowercases_and_hyphenates() {
+        assert_eq!(slugify("Email Marketing"), "email-marketing");
+    }
+
+    #[test]
+    fn slugify_is_idempotent_on_a_slug() {
+        assert_eq!(slugify("email-marketing"), "email-marketing");
+    }
+
+    #[test]
+    fn slugify_collapses_and_trims_separators() {
+        assert_eq!(slugify("  SEO & Sales!!  "), "seo-sales");
     }
 }

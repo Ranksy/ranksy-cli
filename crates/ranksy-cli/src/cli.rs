@@ -97,14 +97,16 @@ pub enum Commands {
 
 #[derive(Subcommand)] pub enum AppsCmd { List }
 #[derive(Subcommand)] pub enum RankingsCmd {
-    Get { /// Filter by keyword (API v1 has no keyword filter yet; this errors until it does).
+    Get { /// Narrow the snapshot to one keyword (text or slug); same data as `rankings by-keyword`.
         #[arg(long)] keyword: Option<String> },
     /// Scraped rank rows for a single keyword.
     ByKeyword { keyword: String, #[arg(long)] limit: Option<i64> },
 }
 #[derive(Subcommand)] pub enum KeywordsCmd {
     List,
+    /// Start tracking a keyword (needs `keywords:write`).
     Track { keyword: String },
+    /// Stop tracking a keyword; accepts the keyword text or its slug (needs `keywords:write`).
     Untrack { keyword: String },
     /// Keyword cannibalization report.
     Cannibalization { #[arg(long)] days: Option<i64> },
@@ -129,7 +131,10 @@ pub enum Commands {
 }
 #[derive(Subcommand)] pub enum ReviewsCmd { List }
 #[derive(Subcommand)] pub enum InstallsCmd { Get }
-#[derive(Subcommand)] pub enum ListingCmd { Get }
+#[derive(Subcommand)] pub enum ListingCmd {
+    /// Fetch the app's store listing (needs `apps:read`).
+    Get,
+}
 #[derive(Subcommand)] pub enum LtvCmd {
     /// Per-customer lifetime value.
     Customers {

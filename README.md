@@ -45,6 +45,11 @@ export RANKSY_API_KEY=rk_live_xxx
 Key resolution, highest priority first: `--api-key` flag, `RANKSY_API_KEY`
 env var, `~/.config/ranksy/config.toml`.
 
+`ranksy` also loads a `.env` from the current directory (walking up parent
+dirs) at startup, so `RANKSY_API_KEY` (and `RANKSY_BASE_URL`) in a project-local
+`.env` are picked up without exporting them. A variable already exported in your
+shell wins over the `.env` file.
+
 ## Usage
 
 ```bash
@@ -73,13 +78,16 @@ Global flags:
 Exit codes: `0` success, `2` usage error, `1` API or runtime failure — so CI
 can gate on the result.
 
-## Known gaps
+## Managing keywords
 
-These commands exist in the surface but have no API v1 endpoint yet, so they
-fail with a clear "not implemented" error (exit 1) instead of pretending:
+```bash
+ranksy --app 01HZX9ABCDEF keywords track "email marketing"   # needs keywords:write
+ranksy --app 01HZX9ABCDEF keywords untrack "email marketing" # text or slug
+```
 
-- `keywords track` / `keywords untrack`
-- `listing get`
+`untrack` slugifies the keyword to match the tracked row, so both the keyword
+text and its slug work. If a keyword's slug collided on track (a rare sha1
+suffix), untrack it with the exact `slug` shown in `keywords list`.
 
 ## Development
 
