@@ -1,13 +1,48 @@
-use serde::Deserialize;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_BASE_URL: &str = "https://ranksyapp.com/api/v1";
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Shopify App Store ads sync, written by `ranksy ads connect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ads: Option<AdsConfig>,
+    /// Keys this version doesn't know about, kept so rewriting the file never drops them.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdsConfig {
+    /// Shopify Partners organization id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+    /// Chrome profile dir; only stored when it differs from the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrome_profile: Option<String>,
+    /// Chrome debug port; only stored when it differs from the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Shopify app (Partners app API key) -> Ranksy app.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub apps: BTreeMap<String, AdsApp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdsApp {
+    /// Ranksy app ulid the ads are imported into.
+    pub ulid: String,
+    /// Shopify app name, for humans reading the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -72,33 +107,50 @@ pub fn load() -> ConfigFile {
     }
 }
 
-pub fn save_api_key(key: &str) -> Result<(), ConfigError> {
-    let path = config_path();
+/// Reads the config for a read-modify-write: a missing file is empty, but a file that
+/// doesn't parse is an error, so saving never overwrites settings we couldn't read.
+fn load_for_update(path: &Path) -> Result<ConfigFile, ConfigError> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => toml::from_str(&s).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConfigFile::default()),
+        Err(e) => Err(ConfigError::Io(e)),
+    }
+}
+
+/// Serializes `file` to `path` (0600 on unix), creating the directory if needed.
+fn write_file(path: &Path, file: &ConfigFile) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
     }
-    let mut existing = load();
-    existing.api_key = Some(key.to_string());
-    let body = format!(
-        "api_key = \"{}\"\n{}{}",
-        key,
-        existing.app.map(|a| format!("app = \"{a}\"\n")).unwrap_or_default(),
-        existing.base_url.map(|b| format!("base_url = \"{b}\"\n")).unwrap_or_default(),
-    );
-    std::fs::write(&path, body).map_err(ConfigError::Io)?;
-    set_permissions_0600(&path)?;
-    Ok(())
+    let body = toml::to_string(file).map_err(|e| ConfigError::Parse(e.to_string()))?;
+    std::fs::write(path, body).map_err(ConfigError::Io)?;
+    set_permissions_0600(path)
+}
+
+pub fn save_api_key(key: &str) -> Result<(), ConfigError> {
+    let path = config_path();
+    let mut file = load_for_update(&path)?;
+    file.api_key = Some(key.to_string());
+    write_file(&path, &file)
+}
+
+/// Replaces the `[ads]` table, leaving every other setting as it was.
+pub fn save_ads(ads: AdsConfig) -> Result<(), ConfigError> {
+    let path = config_path();
+    let mut file = load_for_update(&path)?;
+    file.ads = Some(ads);
+    write_file(&path, &file)
 }
 
 #[cfg(unix)]
-fn set_permissions_0600(path: &PathBuf) -> Result<(), ConfigError> {
+fn set_permissions_0600(path: &Path) -> Result<(), ConfigError> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o600);
     std::fs::set_permissions(path, perms).map_err(ConfigError::Io)
 }
 
 #[cfg(not(unix))]
-fn set_permissions_0600(_path: &PathBuf) -> Result<(), ConfigError> {
+fn set_permissions_0600(_path: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 
@@ -107,7 +159,7 @@ mod tests {
     use super::*;
 
     fn file() -> ConfigFile {
-        ConfigFile { api_key: Some("file-key".into()), app: Some("app-file".into()), base_url: None }
+        ConfigFile { api_key: Some("file-key".into()), app: Some("app-file".into()), ..Default::default() }
     }
 
     #[test]
@@ -131,7 +183,7 @@ mod tests {
 
     #[test]
     fn missing_key_errors() {
-        let empty = ConfigFile { api_key: None, app: None, base_url: None };
+        let empty = ConfigFile::default();
         assert!(matches!(resolve(None, None, None, None, None, &empty), Err(ConfigError::MissingKey)));
     }
 
@@ -139,5 +191,92 @@ mod tests {
     fn base_url_defaults() {
         let r = resolve(Some("k".into()), None, None, None, None, &file()).unwrap();
         assert_eq!(r.base_url, DEFAULT_BASE_URL);
+    }
+
+    fn ads() -> AdsConfig {
+        AdsConfig {
+            org: Some("1234567".into()),
+            chrome_profile: None,
+            port: Some(9444),
+            apps: BTreeMap::from([
+                ("abc123".to_string(), AdsApp { ulid: "01JABCDEF".into(), name: Some("Block Country".into()) }),
+                ("def456".to_string(), AdsApp { ulid: "01JXYZ".into(), name: None }),
+            ]),
+        }
+    }
+
+    #[test]
+    fn ads_round_trip_keeps_existing_keys() {
+        let original = ConfigFile {
+            api_key: Some("rk_live_x".into()),
+            app: Some("01HAPP".into()),
+            base_url: Some("https://example.test/api/v1".into()),
+            ads: Some(ads()),
+            ..Default::default()
+        };
+        let text = toml::to_string(&original).unwrap();
+        assert!(text.contains("api_key = \"rk_live_x\""));
+        assert!(text.contains("[ads.apps.abc123]"));
+        assert!(!text.contains("chrome_profile"));
+
+        let parsed: ConfigFile = toml::from_str(&text).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn parses_hand_written_ads_table() {
+        let parsed: ConfigFile = toml::from_str(
+            "api_key = \"k\"\n[ads]\norg = \"42\"\n[ads.apps.key1]\nulid = \"01A\"\nname = \"One\"\n[ads.apps.key2]\nulid = \"01B\"\n",
+        )
+        .unwrap();
+        let ads = parsed.ads.unwrap();
+        assert_eq!(ads.org.as_deref(), Some("42"));
+        assert_eq!(ads.apps["key1"], AdsApp { ulid: "01A".into(), name: Some("One".into()) });
+        assert_eq!(ads.apps["key2"].name, None);
+        assert_eq!(parsed.api_key.as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn config_without_ads_still_loads_and_unknown_keys_survive() {
+        let parsed: ConfigFile = toml::from_str("api_key = \"k\"\ntheme = \"dark\"\n[other]\nx = 1\n").unwrap();
+        assert!(parsed.ads.is_none());
+        let again: ConfigFile = toml::from_str(&toml::to_string(&parsed).unwrap()).unwrap();
+        assert_eq!(again, parsed);
+        assert_eq!(again.extra["theme"].as_str(), Some("dark"));
+    }
+
+    #[test]
+    fn saving_ads_keeps_api_key_on_disk_with_0600() {
+        let dir = std::env::temp_dir().join(format!("ranksy-config-test-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "api_key = \"keep-me\"\nbase_url = \"https://b.test/api/v1\"\n").unwrap();
+
+        let mut loaded = load_for_update(&path).unwrap();
+        loaded.ads = Some(ads());
+        write_file(&path, &loaded).unwrap();
+
+        let reread = load_for_update(&path).unwrap();
+        assert_eq!(reread.api_key.as_deref(), Some("keep-me"));
+        assert_eq!(reread.base_url.as_deref(), Some("https://b.test/api/v1"));
+        assert_eq!(reread.ads, Some(ads()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unparseable_config_is_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("ranksy-config-bad-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "api_key = [oops").unwrap();
+        assert!(matches!(load_for_update(&path), Err(ConfigError::Parse(_))));
+        assert!(matches!(load_for_update(&dir.join("missing.toml")), Ok(f) if f == ConfigFile::default()));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -19,6 +19,13 @@ pub async fn run(cli: Cli) -> Result<()> {
     }
 
     let file = config::load();
+
+    // ads resolves the key itself: `ads sync --dry-run` works without one.
+    if let Commands::Ads { cmd } = &cli.command {
+        let ctx = crate::ads::Ctx { api_key: cli.api_key.clone(), base_url: cli.base_url.clone(), quiet: cli.quiet, file };
+        return crate::ads::run(cmd, ctx).await;
+    }
+
     let resolved = config::resolve(
         cli.api_key.clone(),
         None, // env already folded in by clap's `env` attr on api_key
@@ -56,7 +63,7 @@ async fn dispatch(
     use crate::cli::*;
     let need_app = || app.ok_or_else(|| anyhow!("no app selected. Pass --app <id> or set it in config."));
     let (value, columns) = match command {
-        Commands::Login { .. } | Commands::Update { .. } => unreachable!("handled earlier"),
+        Commands::Login { .. } | Commands::Update { .. } | Commands::Ads { .. } => unreachable!("handled earlier"),
         Commands::Whoami => (
             client.whoami().await?,
             vec![col("Ulid", "ulid"), col("Slug", "slug"), col("Name", "name")],
