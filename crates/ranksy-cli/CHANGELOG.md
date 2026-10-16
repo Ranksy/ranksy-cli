@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/Ranksy/ranksy-cli/compare/v0.6.0...v0.7.0) (2026-10-16)
+
+
+### Features
+
+* add --after and --before to `ranksy ads sync` ([#11](https://github.com/Ranksy/ranksy-cli/issues/11)) ([75bc494](https://github.com/Ranksy/ranksy-cli/commit/75bc494a3308d54f1aeb26b04e9abbeef4397019))
+* send Shopify's keyword recommendations with the ads snapshot ([#12](https://github.com/Ranksy/ranksy-cli/issues/12)) ([11d75b8](https://github.com/Ranksy/ranksy-cli/commit/11d75b859107b5e6d190133594283ce76d9d7dce))
+
 ## [0.6.0](https://github.com/Ranksy/ranksy-cli/compare/v0.5.0...v0.6.0) (2026-10-16)
 
 
