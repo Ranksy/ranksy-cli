@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/Ranksy/ranksy-cli/compare/v0.5.0...v0.6.0) (2026-10-16)
+
+
+### Features
+
+* add `ranksy ads connect` and `ranksy ads sync` for Shopify App Store ads ([#9](https://github.com/Ranksy/ranksy-cli/issues/9)) ([194887e](https://github.com/Ranksy/ranksy-cli/commit/194887edd17bef47b932606e63b88133bd807956))
+
 ## [0.5.0](https://github.com/Ranksy/ranksy-cli/compare/v0.4.0...v0.5.0) (2026-09-04)
 
 
