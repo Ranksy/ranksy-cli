@@ -14,6 +14,8 @@ pub const MAX_ROWS_PER_REQUEST: usize = 40_000;
 pub struct AppPayload {
     pub name: String,
     pub campaigns: Vec<Value>,
+    /// Shopify's keyword ideas for the app (plain strings); sent with the campaign snapshot.
+    pub keyword_ideas: Vec<Value>,
     pub days: Vec<Value>,
 }
 
@@ -143,6 +145,33 @@ pub fn campaign_snapshot(c: &Value) -> Value {
                 .collect::<Vec<_>>()
         });
     let field = |key: &str| c.get(key).cloned().unwrap_or(Value::Null);
+    let recommendations = c
+        .get("recommendations")
+        .filter(|r| r.is_object())
+        .map(|r| {
+            let list = |key: &str| {
+                r.get(key)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            json!({
+                "new_keywords": list("newKeywords").iter().map(|k| json!({
+                    "shopify_id": k.get("id").cloned().unwrap_or(Value::Null),
+                    "keyword": truncated(k.get("keyword"), 500),
+                    "search_term": truncated(k.get("searchTerm"), 500),
+                    "bid": opt(k.get("bid")),
+                    "return_on_ad_spend": opt(k.get("returnOnAdSpend")),
+                })).collect::<Vec<_>>(),
+                "pause_keywords": list("pauseKeywords").iter().map(|k| json!({
+                    "shopify_keyword_id": k.get("id").cloned().unwrap_or(Value::Null),
+                    "keyword": truncated(k.get("keyword"), 500),
+                    "match_type": k.get("matchType").cloned().unwrap_or(Value::Null),
+                    "return_on_ad_spend": opt(k.get("returnOnAdSpend")),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .unwrap_or(Value::Null);
 
     json!({
         "shopify_campaign_id": field("id"),
@@ -166,6 +195,7 @@ pub fn campaign_snapshot(c: &Value) -> Value {
         },
         "keywords": keywords,
         "negative_keywords": negatives,
+        "recommendations": recommendations,
     })
 }
 
@@ -230,6 +260,7 @@ fn impressions(c: &Value) -> f64 {
 /// impressions. `pulled` is `(day, raw campaigns)` in the order days should be sent.
 pub fn build_payloads(
     snapshot: &[Value],
+    keyword_ideas: &BTreeMap<String, Vec<Value>>,
     pulled: &[(String, Vec<Value>)],
 ) -> BTreeMap<String, AppPayload> {
     let mut by_app: BTreeMap<String, AppPayload> = BTreeMap::new();
@@ -237,6 +268,15 @@ pub fn build_payloads(
     for c in snapshot {
         if let Some(entry) = entry_for(&mut by_app, c.get("app")) {
             entry.campaigns.push(campaign_snapshot(c));
+        }
+    }
+    for (api_key, entry) in &mut by_app {
+        if let Some(ideas) = keyword_ideas.get(api_key) {
+            entry.keyword_ideas = ideas
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|s| json!(s.chars().take(500).collect::<String>()))
+                .collect();
         }
     }
     for (day, campaigns) in pulled {
@@ -429,6 +469,28 @@ mod tests {
     }
 
     #[test]
+    fn maps_shopify_recommendations() {
+        let mut c = raw_snapshot_campaign("54871", "k1", "App One");
+        c["recommendations"] = json!({
+            "newKeywords": [{ "id": "n1", "keyword": "ip block", "searchTerm": "block ip", "bid": 4.5, "returnOnAdSpend": 1.2 }],
+            "pauseKeywords": [{ "id": "1561502", "keyword": "block ip address", "matchType": "exact", "returnOnAdSpend": null }]
+        });
+        let s = campaign_snapshot(&c);
+        assert_eq!(
+            s["recommendations"]["new_keywords"][0],
+            json!({ "shopify_id": "n1", "keyword": "ip block", "search_term": "block ip", "bid": 4.5, "return_on_ad_spend": 1.2 })
+        );
+        assert_eq!(
+            s["recommendations"]["pause_keywords"][0],
+            json!({ "shopify_keyword_id": "1561502", "keyword": "block ip address", "match_type": "exact", "return_on_ad_spend": null })
+        );
+        assert_eq!(
+            campaign_snapshot(&raw_snapshot_campaign("1", "k1", "A"))["recommendations"],
+            Value::Null
+        );
+    }
+
+    #[test]
     fn display_campaign_snapshot_has_null_keyword_lists_and_bid() {
         let c = json!({
             "id": "1", "name": "Home", "status": "paused", "surface": "appstore_homepage", "dailyBudget": 15, "bid": 3,
@@ -498,12 +560,15 @@ mod tests {
                 vec![raw_search_campaign("1", "k1", "App One", 4)],
             ),
         ];
-        let payloads = build_payloads(&snapshot, &pulled);
+        let ideas = BTreeMap::from([("k1".to_string(), vec![json!("ip blocker"), json!(7)])]);
+        let payloads = build_payloads(&snapshot, &ideas, &pulled);
 
         assert_eq!(payloads.len(), 2);
         let one = &payloads["k1"];
         assert_eq!(one.name, "App One");
         assert_eq!(one.campaigns.len(), 2);
+        assert_eq!(one.keyword_ideas, [json!("ip blocker")]);
+        assert!(payloads["k2"].keyword_ideas.is_empty());
         let dates: Vec<_> = one
             .days
             .iter()

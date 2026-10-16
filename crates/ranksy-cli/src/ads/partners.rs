@@ -228,14 +228,41 @@ pub async fn list_apps(tab: &Tab, org: &str) -> Result<Vec<PartnersApp>> {
 }
 
 /// Campaign metadata + keyword snapshots (current state), raw as returned by Partners.
-pub async fn snapshot(tab: &Tab, org: &str) -> Result<Vec<Value>> {
+pub async fn snapshot(tab: &Tab, org: &str) -> Result<Snapshot> {
     let value = run_in_page(tab, "inPageSnapshot", org, &[]).await?;
 
-    Ok(value
-        .get("campaigns")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
+    Ok(Snapshot::from_value(&value))
+}
+
+/// Current campaign settings plus Shopify's keyword ideas per app (by app API key).
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    pub campaigns: Vec<Value>,
+    pub keyword_ideas: std::collections::BTreeMap<String, Vec<Value>>,
+}
+
+impl Snapshot {
+    pub fn from_value(value: &Value) -> Self {
+        Self {
+            campaigns: value
+                .get("campaigns")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            keyword_ideas: value
+                .get("keywordIdeas")
+                .and_then(Value::as_object)
+                .map(|ideas| {
+                    ideas
+                        .iter()
+                        .map(|(key, list)| {
+                            (key.clone(), list.as_array().cloned().unwrap_or_default())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
 }
 
 /// One day of campaign metrics, breakdowns and search terms, raw as returned by Partners.

@@ -104,9 +104,31 @@ async function inPageSnapshot(gql) {
       c.negativeKeywords.push(...n.nodes);
       after = n.pageInfo.hasNextPage ? n.pageInfo.endCursor : null;
     } while (after);
+
+    // Shopify's own suggestions for live campaigns; optional, so a failure never blocks the sync.
+    if (!c.archived) {
+      try {
+        const d = await gql('RanksyRecommendations', `query RanksyRecommendations($id: ID!) { recommendations(campaignId: $id, dismissed: false) {
+          newKeywords { id keyword searchTerm bid returnOnAdSpend } pauseKeywords { id keyword matchType returnOnAdSpend } } }`, { id: c.id });
+        c.recommendations = d.recommendations;
+      } catch {
+        c.recommendations = null;
+      }
+    }
   }
 
-  return { campaigns };
+  // Shopify's keyword ideas per app (plain strings), also optional.
+  const keywordIdeas = {};
+  for (const apiKey of new Set(campaigns.map((c) => c.app?.apiKey).filter(Boolean))) {
+    try {
+      const d = await gql('RanksyKeywordIdeas', `query RanksyKeywordIdeas($k: String!) { keywordRecommendations(apiKey: $k) }`, { k: apiKey });
+      keywordIdeas[apiKey] = d.keywordRecommendations ?? [];
+    } catch {
+      // Not every account gets keyword ideas.
+    }
+  }
+
+  return { campaigns, keywordIdeas };
 }
 
 // One day: campaign metrics, breakdowns, and search terms with impressions.
