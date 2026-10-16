@@ -1,6 +1,8 @@
 use std::time::Duration;
 
 const MAX_RETRIES: u32 = 3;
+/// Bulk uploads validate tens of thousands of rows server-side; the default would cut them off.
+const BULK_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -37,15 +39,22 @@ impl RanksyClient {
     }
 
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::GET, path, query, None).await
+        self.send(reqwest::Method::GET, path, query, None, None).await
     }
 
     async fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::POST, path, &[], Some(body)).await
+        self.send(reqwest::Method::POST, path, &[], Some(&body), None).await
     }
 
     async fn delete(&self, path: &str) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::DELETE, path, &[], None).await
+        self.send(reqwest::Method::DELETE, path, &[], None, None).await
+    }
+
+    /// POST an arbitrary JSON body to `path` (relative to the base URL) with the usual
+    /// 429/5xx retries and a long timeout, for bulk endpoints such as the ads sync whose
+    /// requests carry tens of thousands of rows.
+    pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        self.send(reqwest::Method::POST, path, &[], Some(body), Some(BULK_TIMEOUT)).await
     }
 
     /// Generic GET against `/apps/{app}/{suffix}` with optional query params.
@@ -64,14 +73,18 @@ impl RanksyClient {
         method: reqwest::Method,
         path: &str,
         query: &[(&str, &str)],
-        body: Option<serde_json::Value>,
+        body: Option<&serde_json::Value>,
+        timeout: Option<Duration>,
     ) -> Result<serde_json::Value, ApiError> {
         let url = format!("{}{}", self.base_url, path);
         let mut attempt = 0;
         loop {
             let mut req = self.http.request(method.clone(), &url).query(query);
-            if let Some(b) = &body {
+            if let Some(b) = body {
                 req = req.json(b);
+            }
+            if let Some(t) = timeout {
+                req = req.timeout(t);
             }
             let resp = req.send().await?;
             let status = resp.status();
@@ -97,6 +110,11 @@ impl RanksyClient {
     }
     pub async fn list_apps(&self) -> Result<serde_json::Value, ApiError> {
         self.get("/apps", &[]).await
+    }
+    /// One page of `GET /apps`, for callers that need every app (`ranksy ads connect`).
+    pub async fn list_apps_page(&self, page: u32, per_page: u32) -> Result<serde_json::Value, ApiError> {
+        let (page, per_page) = (page.to_string(), per_page.to_string());
+        self.get("/apps", &[("page", page.as_str()), ("per_page", per_page.as_str())]).await
     }
     /// Current ranking snapshot for the app. With a keyword, narrows to that one
     /// keyword via the by-keyword endpoint (the rankings list has no query-param
@@ -188,7 +206,66 @@ fn slugify(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{slugify, ApiError, ClientConfig, RanksyClient};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client(server: &MockServer) -> RanksyClient {
+        RanksyClient::new(ClientConfig { api_key: "rk_test_x".into(), base_url: format!("{}/api/v1/", server.uri()) }).unwrap()
+    }
+
+    #[tokio::test]
+    async fn post_json_sends_the_body_with_auth_and_retries_5xx() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({ "campaigns": [], "days": [{ "date": "2026-10-15" }] });
+        Mock::given(method("POST"))
+            .and(path("/api/v1/apps/01A/shopify-ads/sync"))
+            .and(header("authorization", "Bearer rk_test_x"))
+            .and(body_json(&body))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/apps/01A/shopify-ads/sync"))
+            .and(body_json(&body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": { "days": { "stored": 1 } } })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let res = client(&server).post_json("/apps/01A/shopify-ads/sync", &body).await.unwrap();
+        assert_eq!(res["data"]["days"]["stored"], 1);
+    }
+
+    #[tokio::test]
+    async fn post_json_surfaces_forbidden_without_retrying() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("missing scope"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = client(&server).post_json("/apps/01A/shopify-ads/sync", &serde_json::json!({})).await.unwrap_err();
+        assert!(matches!(err, ApiError::Status { code: 403, ref body } if body == "missing scope"));
+    }
+
+    #[tokio::test]
+    async fn list_apps_page_passes_paging_params() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/apps"))
+            .and(query_param("page", "2"))
+            .and(query_param("per_page", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": [] })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client(&server).list_apps_page(2, 100).await.unwrap();
+    }
 
     #[test]
     fn slugify_lowercases_and_hyphenates() {

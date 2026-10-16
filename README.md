@@ -89,6 +89,41 @@ ranksy --app 01HZX9ABCDEF keywords untrack "email marketing" # text or slug
 text and its slug work. If a keyword's slug collided on track (a rare sha1
 suffix), untrack it with the exact `slug` shown in `keywords list`.
 
+## Shopify App Store ads sync
+
+`ranksy ads` copies your Shopify App Store ads data (campaigns, keywords, daily
+metrics, search terms, country/plan/device breakdowns) from Shopify Partners
+into Ranksy. Run `connect` once, then `sync` on a schedule:
+
+```bash
+ranksy ads connect   # one time: log in to Partners, map Shopify apps to Ranksy apps
+ranksy ads sync      # last 3 complete days; safe to re-run, re-pushed days are replaced
+
+# cron
+0 6 * * * ranksy ads sync -q
+```
+
+- Partners sits behind Cloudflare and a captcha, so `ads` drives a real Chrome
+  window over its debug port. The login stays in a dedicated profile
+  (`<data dir>/partners-chrome`); `ranksy` never sees your Shopify password or
+  cookies, and never fills in the login form. Chrome needs to be installed
+  (`--chrome` or `CHROME_BIN` to point at a specific binary).
+- `connect` opens Chrome, waits for you to log in (up to 10 minutes), and asks
+  which Ranksy app each Shopify app should be imported into. The mapping is
+  saved under `[ads]` in `~/.config/ranksy/config.toml`.
+- `sync` opens (or reuses) the same Chrome. If the Partners session has expired,
+  or the captcha shows up again, it exits non-zero with "Partners session
+  expired". Run `ranksy ads connect` and log in again.
+- The API key needs the `apps:read` and `ads:write` scopes, and its team must
+  own the Ranksy apps you map. A 403 from the sync endpoint means a scope is
+  missing.
+- Backfill with `ranksy ads sync --from 2025-01-01 --concurrency 4`. Days are
+  pulled newest first and pushed in chunks (`--chunk-days`, default 7). Raw day
+  exports are cached in `--out` (default `<cache dir>/ads-export`); `--resume`
+  reuses them. `--dry-run` pulls and writes the payload files without posting.
+- Exit code is non-zero if any request to Ranksy failed. The other apps still
+  run, and failures are listed at the end.
+
 ## Development
 
 ```bash

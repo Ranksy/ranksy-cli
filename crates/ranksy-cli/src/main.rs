@@ -1,3 +1,4 @@
+mod ads;
 mod cli;
 mod config;
 mod output;

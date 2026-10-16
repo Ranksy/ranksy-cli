@@ -1,0 +1,417 @@
+//! `ranksy ads connect`: one-time, interactive setup.
+
+use super::chrome::ChromeOptions;
+use super::partners::{self, PartnersApp};
+use super::sync::{self, SyncOptions};
+use super::{chrome_options, default_profile, ranksy_error, Ctx, DEFAULT_PORT};
+use crate::cli::ChromeArgs;
+use crate::config::{self, AdsApp, AdsConfig};
+use anyhow::{anyhow, bail, Context, Result};
+use dialoguer::{Confirm, FuzzySelect};
+use ranksy_api::RanksyClient;
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+const SKIP_LABEL: &str = "Skip (don't sync this app)";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RanksyApp {
+    pub ulid: String,
+    pub name: String,
+    pub slug: Option<String>,
+}
+
+pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) -> Result<()> {
+    let existing = ctx.file.ads.clone();
+    let opts = chrome_options(chrome_args, existing.as_ref());
+
+    // Check the API key and list the Ranksy apps before opening a browser.
+    let client = ctx.client()?;
+    let ranksy_apps = load_ranksy_apps(&client).await?;
+    if ranksy_apps.is_empty() {
+        bail!("No Ranksy apps are visible to this API key. The key's team must own the app(s) you want to import ads into.");
+    }
+
+    println!(
+        "Opening Chrome with the Partners profile at {}",
+        opts.profile.display()
+    );
+    let start_url = org_flag.map_or_else(
+        || partners::ORGANIZATIONS_URL.to_string(),
+        partners::ads_url,
+    );
+    let tab = partners::open_tab(&opts, &start_url).await?;
+    let org = partners::wait_for_login(
+        &tab,
+        partners::LoginWait {
+            timeout_secs: partners::CONNECT_LOGIN_TIMEOUT_SECS,
+            wanted_org: org_flag,
+            interactive: true,
+        },
+    )
+    .await?;
+    println!("Logged in to Partners organization {org}.");
+
+    let partners_apps = partners::list_apps(&tab, &org).await;
+    tab.close().await;
+    let partners_apps = partners_apps?;
+    if partners_apps.is_empty() {
+        bail!("No ad campaigns found in Partners organization {org}. Pass --org <id> if your ads live in another organization.");
+    }
+
+    let current = existing.as_ref().map(|a| &a.apps);
+    let mut choices: Vec<(PartnersApp, Option<RanksyApp>)> = Vec::new();
+    for app in partners_apps {
+        let picked = choose_ranksy_app(
+            &app,
+            &ranksy_apps,
+            current.and_then(|m| m.get(&app.api_key)),
+        )?;
+        choices.push((app, picked));
+    }
+
+    let ads = build_ads_config(existing.as_ref(), &org, &opts, &choices);
+    config::save_ads(ads.clone()).map_err(|e| anyhow!(e.to_string()))?;
+    println!("\nSaved to {}", config::config_path().display());
+    print_mapping(&choices);
+
+    if ads.apps.is_empty() {
+        println!("\nNo apps are mapped, so `ranksy ads sync` has nothing to do. Re-run `ranksy ads connect` to map them.");
+        return Ok(());
+    }
+    println!("\nNext: `ranksy ads sync` (cron: `0 6 * * * ranksy ads sync`).");
+
+    let run_now = Confirm::new()
+        .with_prompt("Run the first sync now (last 3 complete days)?")
+        .default(false)
+        .interact()
+        .unwrap_or(false);
+    if run_now {
+        sync::run(ctx, &ads, opts, &SyncOptions::first_run()).await?;
+    }
+
+    Ok(())
+}
+
+fn choose_ranksy_app(
+    app: &PartnersApp,
+    ranksy_apps: &[RanksyApp],
+    existing: Option<&AdsApp>,
+) -> Result<Option<RanksyApp>> {
+    let preselected = preselect(&app.name, existing, ranksy_apps);
+    if preselected.is_none() {
+        println!(
+            "\nNo Ranksy app is named like \"{}\". Pick one, or skip; the API key's team must own the Ranksy app.",
+            app.name
+        );
+    }
+
+    let mut items = vec![SKIP_LABEL.to_string()];
+    items.extend(ranksy_apps.iter().map(|a| {
+        a.slug
+            .as_ref()
+            .map_or_else(|| a.name.clone(), |s| format!("{} ({s})", a.name))
+    }));
+    let picked = FuzzySelect::new()
+        .with_prompt(format!(
+            "Import ads of Shopify app \"{}\" ({} campaigns) into",
+            app.name, app.campaigns
+        ))
+        .items(&items)
+        .default(preselected.map_or(0, |i| i + 1))
+        .interact()
+        .context(
+            "could not read your choice; `ranksy ads connect` needs an interactive terminal",
+        )?;
+
+    Ok(picked.checked_sub(1).map(|i| ranksy_apps[i].clone()))
+}
+
+/// Index into `ranksy_apps` to pre-select: the app already mapped, else a name match.
+pub fn preselect(
+    partners_name: &str,
+    existing: Option<&AdsApp>,
+    ranksy_apps: &[RanksyApp],
+) -> Option<usize> {
+    if let Some(mapped) = existing {
+        if let Some(i) = ranksy_apps.iter().position(|a| a.ulid == mapped.ulid) {
+            return Some(i);
+        }
+    }
+    let wanted = partners_name.trim().to_lowercase();
+    if let Some(i) = ranksy_apps
+        .iter()
+        .position(|a| a.name.trim().to_lowercase() == wanted)
+    {
+        return Some(i);
+    }
+
+    // One unambiguous "contains" match ("Block Country" vs "Block Country: Geo Blocker").
+    let mut loose = ranksy_apps.iter().enumerate().filter(|(_, a)| {
+        let name = a.name.trim().to_lowercase();
+        !name.is_empty() && (wanted.contains(&name) || name.contains(&wanted))
+    });
+    match (loose.next(), loose.next()) {
+        (Some((i, _)), None) => Some(i),
+        _ => None,
+    }
+}
+
+/// The `[ads]` table to save: keeps earlier mappings for Shopify apps not seen this time,
+/// replaces the ones that were, and drops apps that were skipped.
+pub fn build_ads_config(
+    existing: Option<&AdsConfig>,
+    org: &str,
+    opts: &ChromeOptions,
+    choices: &[(PartnersApp, Option<RanksyApp>)],
+) -> AdsConfig {
+    let mut apps: BTreeMap<String, AdsApp> = existing.map(|a| a.apps.clone()).unwrap_or_default();
+    for (partners_app, ranksy_app) in choices {
+        match ranksy_app {
+            Some(r) => {
+                apps.insert(
+                    partners_app.api_key.clone(),
+                    AdsApp {
+                        ulid: r.ulid.clone(),
+                        name: Some(partners_app.name.clone()),
+                    },
+                );
+            }
+            None => {
+                apps.remove(&partners_app.api_key);
+            }
+        }
+    }
+
+    AdsConfig {
+        org: Some(org.to_string()),
+        chrome_profile: (opts.profile != default_profile())
+            .then(|| opts.profile.display().to_string()),
+        port: (opts.port != DEFAULT_PORT).then_some(opts.port),
+        apps,
+    }
+}
+
+fn print_mapping(choices: &[(PartnersApp, Option<RanksyApp>)]) {
+    println!("\nShopify app -> Ranksy app");
+    for (partners_app, ranksy_app) in choices {
+        match ranksy_app {
+            Some(r) => println!("  {} -> {} ({})", partners_app.name, r.name, r.ulid),
+            None => println!("  {} -> skipped", partners_app.name),
+        }
+    }
+}
+
+/// Every Ranksy app visible to the key (proves the key works and has `apps:read`).
+async fn load_ranksy_apps(client: &RanksyClient) -> Result<Vec<RanksyApp>> {
+    let mut apps = Vec::new();
+    for page in 1..20u32 {
+        let response = client
+            .list_apps_page(page, 100)
+            .await
+            .map_err(|e| ranksy_error(e, "could not list your Ranksy apps"))?;
+        apps.extend(parse_apps(&response));
+        if !has_more(&response, page) {
+            break;
+        }
+    }
+
+    Ok(apps)
+}
+
+pub fn parse_apps(response: &Value) -> Vec<RanksyApp> {
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            Some(RanksyApp {
+                ulid: a
+                    .get("ulid")?
+                    .as_str()
+                    .filter(|s| !s.is_empty())?
+                    .to_string(),
+                name: a
+                    .get("name")?
+                    .as_str()
+                    .filter(|s| !s.is_empty())?
+                    .to_string(),
+                slug: a.get("slug").and_then(Value::as_str).map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+fn has_more(response: &Value, page: u32) -> bool {
+    response
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || response
+            .pointer("/meta/last_page")
+            .and_then(Value::as_u64)
+            .is_some_and(|last| last > u64::from(page))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn apps() -> Vec<RanksyApp> {
+        vec![
+            RanksyApp {
+                ulid: "01A".into(),
+                name: "Block Country".into(),
+                slug: Some("block-country".into()),
+            },
+            RanksyApp {
+                ulid: "01B".into(),
+                name: "Other App".into(),
+                slug: None,
+            },
+        ]
+    }
+
+    fn partners(key: &str, name: &str) -> PartnersApp {
+        PartnersApp {
+            api_key: key.into(),
+            name: name.into(),
+            campaigns: 3,
+        }
+    }
+
+    #[test]
+    fn preselects_case_insensitive_name_match() {
+        assert_eq!(preselect("  block COUNTRY ", None, &apps()), Some(0));
+        assert_eq!(preselect("Nothing Alike", None, &apps()), None);
+    }
+
+    #[test]
+    fn preselect_prefers_existing_mapping() {
+        let existing = AdsApp {
+            ulid: "01B".into(),
+            name: None,
+        };
+        assert_eq!(
+            preselect("Block Country", Some(&existing), &apps()),
+            Some(1)
+        );
+        // A mapping to an app that's no longer visible falls back to the name match.
+        let gone = AdsApp {
+            ulid: "01Z".into(),
+            name: None,
+        };
+        assert_eq!(preselect("Block Country", Some(&gone), &apps()), Some(0));
+    }
+
+    #[test]
+    fn preselects_a_single_loose_match_only() {
+        assert_eq!(
+            preselect("Block Country: Geo Blocker", None, &apps()),
+            Some(0)
+        );
+        let two = vec![
+            RanksyApp {
+                ulid: "1".into(),
+                name: "Geo".into(),
+                slug: None,
+            },
+            RanksyApp {
+                ulid: "2".into(),
+                name: "Geo Blocker".into(),
+                slug: None,
+            },
+        ];
+        assert_eq!(preselect("Geo Blocker Pro", None, &two), None);
+    }
+
+    #[test]
+    fn builds_config_with_non_default_chrome_settings_only() {
+        let default_opts = ChromeOptions {
+            bin: None,
+            port: DEFAULT_PORT,
+            profile: default_profile(),
+        };
+        let choices = vec![
+            (partners("k1", "App One"), Some(apps()[0].clone())),
+            (partners("k2", "App Two"), None),
+        ];
+        let ads = build_ads_config(None, "777", &default_opts, &choices);
+        assert_eq!(ads.org.as_deref(), Some("777"));
+        assert_eq!(ads.chrome_profile, None);
+        assert_eq!(ads.port, None);
+        assert_eq!(ads.apps.len(), 1);
+        assert_eq!(
+            ads.apps["k1"],
+            AdsApp {
+                ulid: "01A".into(),
+                name: Some("App One".into())
+            }
+        );
+
+        let custom = ChromeOptions {
+            bin: None,
+            port: 9444,
+            profile: "/custom/profile".into(),
+        };
+        let ads = build_ads_config(None, "777", &custom, &[]);
+        assert_eq!(
+            (ads.port, ads.chrome_profile.as_deref()),
+            (Some(9444), Some("/custom/profile"))
+        );
+    }
+
+    #[test]
+    fn reconnecting_keeps_unseen_mappings_and_drops_skipped_ones() {
+        let existing = AdsConfig {
+            org: Some("1".into()),
+            apps: BTreeMap::from([
+                (
+                    "old".to_string(),
+                    AdsApp {
+                        ulid: "01OLD".into(),
+                        name: None,
+                    },
+                ),
+                (
+                    "k2".to_string(),
+                    AdsApp {
+                        ulid: "01B".into(),
+                        name: None,
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let opts = ChromeOptions {
+            bin: None,
+            port: DEFAULT_PORT,
+            profile: default_profile(),
+        };
+        let choices = vec![
+            (partners("k1", "App One"), Some(apps()[0].clone())),
+            (partners("k2", "App Two"), None),
+        ];
+        let ads = build_ads_config(Some(&existing), "1", &opts, &choices);
+        assert_eq!(ads.apps.keys().collect::<Vec<_>>(), ["k1", "old"]);
+    }
+
+    #[test]
+    fn parses_apps_pages() {
+        let page = json!({ "data": [{ "ulid": "01A", "name": "A", "slug": "a" }, { "name": "no ulid" }, { "ulid": "01B", "name": "" }], "has_more": true });
+        assert_eq!(
+            parse_apps(&page),
+            vec![RanksyApp {
+                ulid: "01A".into(),
+                name: "A".into(),
+                slug: Some("a".into())
+            }]
+        );
+        assert!(has_more(&page, 1));
+        assert!(has_more(&json!({ "meta": { "last_page": 3 } }), 2));
+        assert!(!has_more(&json!({ "meta": { "last_page": 2 } }), 2));
+        assert!(!has_more(&json!({ "data": [] }), 1));
+    }
+}

@@ -18,10 +18,16 @@ serde = { version = "1", features = ["derive"] }
 tabled = "0.16"
 serde_json = "1"
 is-terminal = "0.4"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 anyhow = "1"
 axoupdater = "0.10"
 ranksy-api = { path = "../ranksy-api" }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Same build as ranksy-api's client; only used to talk to Chrome's local debug endpoint.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 wiremock = "0.6"
