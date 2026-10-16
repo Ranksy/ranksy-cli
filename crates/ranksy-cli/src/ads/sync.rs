@@ -44,6 +44,34 @@ impl SyncOptions {
     }
 }
 
+/// Folds the exclusive `--after` / `--before` bounds into inclusive `--from` / `--to`
+/// (clap already rejects `--after` with `--from` and `--before` with `--to`).
+pub fn inclusive_bounds(
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    after: Option<NaiveDate>,
+    before: Option<NaiveDate>,
+) -> Result<(Option<NaiveDate>, Option<NaiveDate>)> {
+    let from = match after {
+        Some(after) => Some(
+            after
+                .succ_opt()
+                .ok_or_else(|| anyhow!("--after is out of range"))?,
+        ),
+        None => from,
+    };
+    let to = match before {
+        Some(before) => Some(
+            before
+                .pred_opt()
+                .ok_or_else(|| anyhow!("--before is out of range"))?,
+        ),
+        None => to,
+    };
+
+    Ok((from, to))
+}
+
 /// Days to pull, newest first. `to` defaults to yesterday (UTC), `from` to `days`
 /// (default 3) complete days ending at `to`.
 pub fn day_range(
@@ -504,6 +532,32 @@ mod tests {
         )
         .is_err());
         assert!(day_range(Some(d("1900-01-01")), None, None, d("2026-10-16")).is_err());
+    }
+
+    #[test]
+    fn after_and_before_are_exclusive() {
+        let (from, to) =
+            inclusive_bounds(None, None, Some(d("2026-10-01")), Some(d("2026-10-05"))).unwrap();
+        let days = day_range(from, to, None, d("2026-10-16")).unwrap();
+        assert_eq!(days, [d("2026-10-04"), d("2026-10-03"), d("2026-10-02")]);
+    }
+
+    #[test]
+    fn after_alone_runs_up_to_yesterday() {
+        let (from, to) = inclusive_bounds(None, None, Some(d("2026-10-12")), None).unwrap();
+        let days = day_range(from, to, None, d("2026-10-16")).unwrap();
+        assert_eq!(days, [d("2026-10-15"), d("2026-10-14"), d("2026-10-13")]);
+    }
+
+    #[test]
+    fn before_combines_with_from_and_days() {
+        let (from, to) =
+            inclusive_bounds(Some(d("2026-09-29")), None, None, Some(d("2026-10-01"))).unwrap();
+        assert_eq!((from, to), (Some(d("2026-09-29")), Some(d("2026-09-30"))));
+
+        let (from, to) = inclusive_bounds(None, None, None, Some(d("2026-10-01"))).unwrap();
+        let days = day_range(from, to, Some(2), d("2026-10-16")).unwrap();
+        assert_eq!(days, [d("2026-09-30"), d("2026-09-29")]);
     }
 
     #[test]

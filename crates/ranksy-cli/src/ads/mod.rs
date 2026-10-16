@@ -63,6 +63,8 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
             chrome,
             from,
             to,
+            after,
+            before,
             days,
             chunk_days,
             concurrency,
@@ -71,9 +73,10 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
             out,
         } => {
             let ads = ctx.file.ads.clone().ok_or_else(|| anyhow!(NOT_CONNECTED))?;
+            let (from, to) = sync::inclusive_bounds(*from, *to, *after, *before)?;
             let opts = sync::SyncOptions {
-                from: *from,
-                to: *to,
+                from,
+                to,
                 days: *days,
                 chunk_days: *chunk_days as usize,
                 concurrency: *concurrency as usize,
