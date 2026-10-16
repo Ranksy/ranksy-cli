@@ -117,8 +117,12 @@ ranksy ads sync      # last 3 complete days; safe to re-run, re-pushed days are 
 - The API key needs the `apps:read` and `ads:write` scopes, and its team must
   own the Ranksy apps you map. A 403 from the sync endpoint means a scope is
   missing.
-- Backfill with `ranksy ads sync --from 2025-01-01 --concurrency 4`. Days are
-  pulled newest first and pushed in chunks (`--chunk-days`, default 7). Raw day
+- Backfill with `ranksy ads sync --from 2025-01-01`. Days are pulled newest
+  first and pushed in chunks (`--chunk-days`, default 7). Partners rate-limits
+  hard, so keep `--concurrency` at 1 unless you need speed.
+- Scope a run with inclusive `--from` / `--to`, or exclusive `--after` /
+  `--before`: `ranksy ads sync --after 2026-01-31 --before 2026-03-01` pulls
+  February. `--after` alone runs up to yesterday. Raw day
   exports are cached in `--out` (default `<cache dir>/ads-export`); `--resume`
   reuses them. `--dry-run` pulls and writes the payload files without posting.
 - Exit code is non-zero if any request to Ranksy failed. The other apps still

@@ -133,6 +133,12 @@ pub enum AdsCmd {
         /// Last day to pull, YYYY-MM-DD (default: yesterday, UTC).
         #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date)]
         to: Option<NaiveDate>,
+        /// Only days after this date (exclusive), YYYY-MM-DD; alone, pulls up to yesterday.
+        #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date, conflicts_with = "from")]
+        after: Option<NaiveDate>,
+        /// Only days before this date (exclusive), YYYY-MM-DD.
+        #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date, conflicts_with = "to")]
+        before: Option<NaiveDate>,
         /// Number of complete days ending at --to, when --from is not given [default: 3].
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         days: Option<u32>,
