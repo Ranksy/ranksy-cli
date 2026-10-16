@@ -171,10 +171,13 @@ pub async fn run(
         days.len()
     ));
 
-    let snapshot = partners::snapshot(&tab, &org).await?;
+    let partners::Snapshot {
+        campaigns: snapshot,
+        keyword_ideas,
+    } = partners::snapshot(&tab, &org).await?;
     std::fs::write(
         opts.out.join("campaigns.json"),
-        json!({ "campaigns": snapshot }).to_string(),
+        json!({ "campaigns": snapshot, "keyword_ideas": keyword_ideas }).to_string(),
     )?;
     log(&format!(
         "Snapshot: {} campaigns ({} archived)",
@@ -209,7 +212,7 @@ pub async fn run(
         };
 
         let pulled: Vec<(String, Vec<Value>)> = chunk.iter().cloned().zip(pulled).collect();
-        for (api_key, app) in payload::build_payloads(&snapshot, &pulled) {
+        for (api_key, app) in payload::build_payloads(&snapshot, &keyword_ideas, &pulled) {
             if opts.dry_run {
                 let file = opts.out.join(format!(
                     "payload-{}-{}.json",
@@ -218,7 +221,8 @@ pub async fn run(
                 ));
                 std::fs::write(
                     &file,
-                    json!({ "campaigns": app.campaigns, "days": app.days }).to_string(),
+                    json!({ "campaigns": app.campaigns, "keyword_ideas": app.keyword_ideas, "days": app.days })
+                        .to_string(),
                 )?;
                 log(&format!(
                     "  {}: {} campaigns, {} campaign-days -> {}",
@@ -345,7 +349,10 @@ impl<'a> Pusher<'a> {
                 continue;
             }
             let campaigns: &[Value] = if send_snapshot { &app.campaigns } else { &[] };
-            let body = json!({ "campaigns": campaigns, "days": batch });
+            let mut body = json!({ "campaigns": campaigns, "days": batch });
+            if send_snapshot {
+                body["keyword_ideas"] = json!(app.keyword_ideas);
+            }
             let range = format!(
                 "{}..{}",
                 batch.last().and_then(|d| d["date"].as_str()).unwrap_or("-"),
