@@ -41,7 +41,9 @@ ranksy --app 01HZX9ABCDEF keywords list --json | jq '.data[0].organic_rank'
 `ranksy ads sync` pulls Shopify Partners ads into Ranksy for every mapped app. To
 backfill just one app, add `--only-app` (Ranksy app id, Shopify app id, or app
 name; repeat it for several): `ranksy ads sync --only-app "My App" --from 2025-11-01 --to 2025-12-20`.
-Other apps are not pulled or pushed.
+The daily campaign list is still pulled for the whole organization, but other
+apps' breakdowns, search terms and keywords are skipped, and nothing is pushed
+for them.
 
 ## Development
 
