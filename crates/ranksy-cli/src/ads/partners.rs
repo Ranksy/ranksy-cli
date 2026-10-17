@@ -228,8 +228,11 @@ pub async fn list_apps(tab: &Tab, org: &str) -> Result<Vec<PartnersApp>> {
 }
 
 /// Campaign metadata + keyword snapshots (current state), raw as returned by Partners.
-pub async fn snapshot(tab: &Tab, org: &str) -> Result<Snapshot> {
-    let value = run_in_page(tab, "inPageSnapshot", org, &[]).await?;
+///
+/// `only` limits the per-campaign pulls (keywords, negatives, recommendations, keyword ideas)
+/// to the apps with those config keys; the campaign list itself is always organization-wide.
+pub async fn snapshot(tab: &Tab, org: &str, only: Option<&[String]>) -> Result<Snapshot> {
+    let value = run_in_page(tab, "inPageSnapshot", org, &[json!(only)]).await?;
 
     Ok(Snapshot::from_value(&value))
 }
@@ -266,8 +269,16 @@ impl Snapshot {
 }
 
 /// One day of campaign metrics, breakdowns and search terms, raw as returned by Partners.
-pub async fn pull_day(tab: &Tab, org: &str, day: &str) -> Result<Vec<Value>> {
-    let value = run_in_page(tab, "inPagePullDay", org, &[json!(day)]).await?;
+///
+/// `only` limits the per-campaign pulls (breakdowns, search terms) to the apps with those
+/// config keys and drops the other campaigns; the day's campaign list is organization-wide.
+pub async fn pull_day(
+    tab: &Tab,
+    org: &str,
+    day: &str,
+    only: Option<&[String]>,
+) -> Result<Vec<Value>> {
+    let value = run_in_page(tab, "inPagePullDay", org, &[json!(day), json!(only)]).await?;
 
     Ok(value
         .get("campaigns")
@@ -323,6 +334,22 @@ mod tests {
     }
 
     #[test]
+    fn passes_the_app_filter_to_the_page_or_null() {
+        let only = ["key1".to_string(), "Named App".to_string()];
+        let js = in_page_expression(
+            "inPagePullDay",
+            "4521",
+            &[json!("2026-10-15"), json!(Some(&only[..]))],
+        );
+        assert!(js.contains(
+            "await inPagePullDay(gql, \"4521\", \"2026-10-15\", [\"key1\",\"Named App\"])"
+        ));
+
+        let js = in_page_expression("inPageSnapshot", "4521", &[json!(None::<&[String]>)]);
+        assert!(js.contains("await inPageSnapshot(gql, \"4521\", null)"));
+    }
+
+    #[test]
     fn in_page_library_defines_every_called_function() {
         for f in [
             "inPageGql",
@@ -330,6 +357,7 @@ mod tests {
             "inPageApps",
             "inPageSnapshot",
             "inPagePullDay",
+            "inPageKeeps",
         ] {
             assert!(INPAGE_JS.contains(&format!("function {f}(")), "{f} missing");
         }

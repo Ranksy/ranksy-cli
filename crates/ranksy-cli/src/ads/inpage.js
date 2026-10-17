@@ -33,6 +33,12 @@ function inPageGql(org) {
   };
 }
 
+// `ranksy ads sync --only-app`: `only` is null (every app) or the config keys of the selected
+// apps, which are Partners app API keys (or app names for older mappings).
+function inPageKeeps(only, c) {
+  return !only || only.includes(c.app?.apiKey) || only.includes(c.app?.name);
+}
+
 // Organizations linked from the Partners organization picker (/organizations).
 async function inPageListOrgs() {
   const orgs = new Map();
@@ -68,12 +74,14 @@ async function inPageApps(gql) {
   return { apps: [...apps.values()] };
 }
 
-// Campaign metadata + keyword / negative keyword snapshots (current state).
-async function inPageSnapshot(gql) {
+// Campaign metadata + keyword / negative keyword snapshots (current state). With `only`, the
+// per-campaign and per-app queries below run for the selected apps only (the campaign list
+// itself is organization-wide).
+async function inPageSnapshot(gql, _org, only = null) {
   const META = `__typename id name status surface subsurface dailyBudget createdAt startingAt endingAt app { apiKey name }
     targeting { geographicTargets { code } planTargets deviceTypeTargets }
     ... on DisplayCampaign { bid suggestedBidRange { lower upper } }`;
-  const campaigns = [];
+  let campaigns = [];
   for (const archived of [false, true]) {
     let after = null;
     do {
@@ -82,6 +90,7 @@ async function inPageSnapshot(gql) {
       after = d.campaigns.pageInfo.hasNextPage ? d.campaigns.pageInfo.endCursor : null;
     } while (after);
   }
+  campaigns = campaigns.filter((c) => inPageKeeps(only, c));
 
   for (const c of campaigns.filter((c) => c.__typename === 'SearchCampaign')) {
     c.keywords = [];
@@ -131,10 +140,12 @@ async function inPageSnapshot(gql) {
   return { campaigns, keywordIdeas };
 }
 
-// One day: campaign metrics, breakdowns, and search terms with impressions.
-async function inPagePullDay(gql, org, day) {
+// One day: campaign metrics, breakdowns, and search terms with impressions. With `only`, the
+// campaigns of other apps are dropped right after the (organization-wide) day listing, so
+// their breakdown and search-term queries never run.
+async function inPagePullDay(gql, org, day, only = null) {
   const M = 'impressions clicks clickthroughRate installs installRate costPerClick costPerInstall costPerMille spend averagePosition page1WinRate customers revenue returnOnSpend costPerCustomer customerRate conversions conversionRate costPerConversion';
-  const campaigns = [];
+  let campaigns = [];
   for (const archived of [false, true]) {
     let after = null;
     do {
@@ -145,6 +156,7 @@ async function inPagePullDay(gql, org, day) {
       after = d.campaignsWithMetrics.pageInfo.hasNextPage ? d.campaignsWithMetrics.pageInfo.endCursor : null;
     } while (after);
   }
+  campaigns = campaigns.filter((c) => inPageKeeps(only, c));
 
   for (const c of campaigns) {
     if (c.metrics.impressions === 0) {
