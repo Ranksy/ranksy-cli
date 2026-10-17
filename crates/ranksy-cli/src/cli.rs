@@ -166,7 +166,7 @@ pub enum AdsCmd {
         /// Only sync this connected Partners organization (default: all of them).
         #[arg(long)]
         org: Option<String>,
-        /// Only sync this mapped app, by Ranksy app id, Shopify app id (API key) or Shopify app name (case-insensitive). Repeat it for several apps; combines with --org. Other apps are not pulled or pushed (default: all mapped apps).
+        /// Only sync this mapped app, by Ranksy app id, Shopify app id (API key) or Shopify app name (case-insensitive). Repeat it for several apps; combines with --org. The organization's daily campaign list is still pulled; other apps' breakdowns, search terms and keywords are skipped, and nothing is pushed for them (default: all mapped apps).
         #[arg(long, value_name = "APP")]
         only_app: Vec<String>,
         /// First day to pull, YYYY-MM-DD (default: --days before --to).
