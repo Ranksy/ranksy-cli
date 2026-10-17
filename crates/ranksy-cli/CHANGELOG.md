@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/Ranksy/ranksy-cli/compare/v0.9.0...v0.9.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* say what ranksy ads sync --only-app still pulls ([#19](https://github.com/Ranksy/ranksy-cli/issues/19)) ([1a23aac](https://github.com/Ranksy/ranksy-cli/commit/1a23aac8da9cf0884da44d06987870d73f97f67c))
+
 ## [0.9.0](https://github.com/Ranksy/ranksy-cli/compare/v0.8.0...v0.9.0) (2026-10-17)
 
 
