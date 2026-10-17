@@ -30,7 +30,10 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Save an API key to the local config.
-    Login { key: String },
+    Login {
+        /// API key from Settings > API Keys (`rk_live_...` or `rk_test_...`).
+        key: String,
+    },
     /// Show the apps accessible with this key (the API has no dedicated whoami endpoint).
     Whoami,
     /// List your apps.
@@ -47,42 +50,64 @@ pub enum Commands {
     Listing { #[command(subcommand)] cmd: ListingCmd },
     /// Customer retention cohorts.
     RetentionCohorts {
+        /// Cohort basis: `install` or `subscription` [default: install].
         #[arg(long)] mode: Option<String>,
+        /// Cohort size: `day`, `week` or `month` [default: month].
         #[arg(long)] group_by: Option<String>,
+        /// Periods per cohort; capped at 60 days, 52 weeks or 36 months [default: 12].
         #[arg(long)] periods: Option<i64>,
+        /// Include test and development stores.
         #[arg(long)] include_test: bool,
     },
     /// Uninstall reason breakdown.
     UninstallReasons {
+        /// Days to look back, 1 to 90 [default: 30].
         #[arg(long)] days: Option<i64>,
     },
     /// Active free trials.
     ActiveTrials {
+        /// Include test and development stores.
         #[arg(long)] include_test: bool,
     },
     /// Churned customers.
     ChurnedCustomers {
+        /// Months to look back, 1 to 12 [default: 6].
         #[arg(long)] months: Option<i64>,
+        /// Page number [default: 1].
         #[arg(long)] page: Option<i64>,
+        /// Rows per page, 1 to 100 [default: 50].
         #[arg(long)] per_page: Option<i64>,
     },
     /// Store install records.
     StoreInstalls {
+        /// `INSTALLED`, `UNINSTALLED`, `CLOSED`, `FROZEN` or `all` [default: INSTALLED].
         #[arg(long)] status: Option<String>,
+        /// Only stores from this first-touch channel.
         #[arg(long)] channel: Option<String>,
+        /// Only stores installed on or after this date, YYYY-MM-DD.
         #[arg(long)] installed_after: Option<String>,
+        /// Only stores installed on or before this date, YYYY-MM-DD.
         #[arg(long)] installed_before: Option<String>,
+        /// Include test and development stores.
         #[arg(long)] include_test: bool,
+        /// Page number [default: 1].
         #[arg(long)] page: Option<i64>,
+        /// Rows per page, 1 to 100 [default: 50].
         #[arg(long)] per_page: Option<i64>,
     },
     /// Customer lifecycle events.
     LifecycleEvents {
+        /// Only this event type, for example `INSTALLED`, `TRIAL_STARTED`, `SUBSCRIBED` or `CHURNED`.
         #[arg(long)] event_type: Option<String>,
+        /// Only events on or after this date, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] event_date_after: Option<String>,
+        /// Only events on or before this date, YYYY-MM-DD [default: today].
         #[arg(long)] event_date_before: Option<String>,
+        /// Include test and development stores.
         #[arg(long)] include_test: bool,
+        /// Page number [default: 1].
         #[arg(long)] page: Option<i64>,
+        /// Rows per page, 1 to 100 [default: 50].
         #[arg(long)] per_page: Option<i64>,
     },
     /// Customer lifetime value.
@@ -97,6 +122,9 @@ pub enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Generate documentation from these command definitions.
+    #[command(hide = true)]
+    Docs { #[command(subcommand)] cmd: DocsCmd },
 }
 
 /// How to reach the Chrome window that holds the Shopify Partners login.
@@ -108,7 +136,7 @@ pub struct ChromeArgs {
     /// Chrome remote-debugging port (default 9333; an existing Chrome on it is reused).
     #[arg(long)]
     pub port: Option<u16>,
-    /// Chrome profile directory that keeps the Partners login (default: <data dir>/partners-chrome).
+    /// Chrome profile directory that keeps the Partners login (default: `<data dir>/partners-chrome`).
     #[arg(long, value_name = "DIR")]
     pub profile: Option<PathBuf>,
 }
@@ -165,48 +193,94 @@ pub enum AdsCmd {
         /// Reuse days already pulled into --out instead of pulling them again.
         #[arg(long)]
         resume: bool,
-        /// Directory for the raw day exports and payload files, one subfolder per organization (default: <cache dir>/ads-export).
+        /// Directory for the raw day exports and payload files, one subfolder per organization (default: `<cache dir>/ads-export`).
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
 }
 
-#[derive(Subcommand)] pub enum AppsCmd { List }
+#[derive(Subcommand)]
+pub enum DocsCmd {
+    /// Print the command reference as MDX for api.ranksyapp.com.
+    Markdown,
+}
+
+#[derive(Subcommand)] pub enum AppsCmd {
+    /// List the apps of the key's team, with their ids.
+    List,
+}
 #[derive(Subcommand)] pub enum RankingsCmd {
+    /// Current keyword rankings of the app.
     Get { /// Narrow the snapshot to one keyword (text or slug); same data as `rankings by-keyword`.
         #[arg(long)] keyword: Option<String> },
     /// Scraped rank rows for a single keyword.
-    ByKeyword { keyword: String, #[arg(long)] limit: Option<i64> },
+    ByKeyword {
+        /// Keyword text or slug.
+        keyword: String,
+        /// Rows to return, 1 to 50 [default: 20].
+        #[arg(long)] limit: Option<i64>,
+    },
 }
 #[derive(Subcommand)] pub enum KeywordsCmd {
+    /// Keywords the app ranks for, with organic and sponsored rank.
     List,
     /// Start tracking a keyword (needs `keywords:write`).
-    Track { keyword: String },
+    Track {
+        /// Keyword text.
+        keyword: String,
+    },
     /// Stop tracking a keyword; accepts the keyword text or its slug (needs `keywords:write`).
-    Untrack { keyword: String },
+    Untrack {
+        /// Keyword text or slug.
+        keyword: String,
+    },
     /// Keyword cannibalization report.
-    Cannibalization { #[arg(long)] days: Option<i64> },
+    Cannibalization {
+        /// Days to look back, 1 to 365 [default: 30].
+        #[arg(long)] days: Option<i64>,
+    },
     /// Paid keyword ad performance.
     AdPerformance {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// Skip keywords with fewer page views [default: 0].
         #[arg(long)] min_pageviews: Option<i64>,
+        /// `installs`, `pageviews` or `conversion_rate` [default: installs].
         #[arg(long)] sort_by: Option<String>,
+        /// Keywords to return, 1 to 50 [default: 30].
         #[arg(long)] limit: Option<i64>,
     },
     /// Installs attributed to each keyword.
     InstallsBySource {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// Only this keyword.
         #[arg(long)] keyword: Option<String>,
+        /// `total_installs`, `organic_installs` or `ad_installs` [default: total_installs].
         #[arg(long)] sort_by: Option<String>,
+        /// Keywords to return, 1 to 50 [default: 30].
         #[arg(long)] limit: Option<i64>,
     },
     /// Daily organic/sponsored trend for one keyword.
-    Trends { keyword: String, #[arg(long)] days: Option<i64> },
+    Trends {
+        /// Keyword text, matched exactly.
+        keyword: String,
+        /// Days to look back, 1 to 90 [default: 14].
+        #[arg(long)] days: Option<i64>,
+    },
 }
-#[derive(Subcommand)] pub enum ReviewsCmd { List }
-#[derive(Subcommand)] pub enum InstallsCmd { Get }
+#[derive(Subcommand)] pub enum ReviewsCmd {
+    /// The app's App Store reviews.
+    List,
+}
+#[derive(Subcommand)] pub enum InstallsCmd {
+    /// Installs attributed by traffic source.
+    Get,
+}
 #[derive(Subcommand)] pub enum ListingCmd {
     /// Fetch the app's store listing (needs `apps:read`).
     Get,
@@ -214,39 +288,56 @@ pub enum AdsCmd {
 #[derive(Subcommand)] pub enum LtvCmd {
     /// Per-customer lifetime value.
     Customers {
+        /// `ltv`, `current_mrr` or `installed_at` [default: ltv].
         #[arg(long)] sort_by: Option<String>,
+        /// Page number [default: 1].
         #[arg(long)] page: Option<i64>,
+        /// Rows per page, 1 to 100 [default: 50].
         #[arg(long)] per_page: Option<i64>,
     },
     /// Lifetime value by acquisition cohort.
     Cohorts {
+        /// Page number [default: 1].
         #[arg(long)] page: Option<i64>,
+        /// Rows per page, 1 to 100 [default: 100].
         #[arg(long)] per_page: Option<i64>,
     },
 }
 #[derive(Subcommand)] pub enum TrafficCmd {
     /// Traffic overview series.
     Overview {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// `daily` or `weekly` [default: weekly for ranges over 14 days, else daily].
         #[arg(long)] granularity: Option<String>,
     },
     /// Install attribution by model.
     Attribution {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// `first_touch`, `last_touch`, `linear`, `time_decay` or `position_based` [default: last_touch].
         #[arg(long)] model: Option<String>,
     },
     /// Conversion funnel.
     Funnel {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// Include test and development stores.
         #[arg(long)] include_test: bool,
     },
     /// Traffic source trends.
     SourceTrends {
+        /// First day, YYYY-MM-DD [default: 30 days ago].
         #[arg(long)] start_date: Option<String>,
+        /// Last day, YYYY-MM-DD [default: today].
         #[arg(long)] end_date: Option<String>,
+        /// `weekly` or `biweekly` [default: weekly].
         #[arg(long)] granularity: Option<String>,
     },
 }
