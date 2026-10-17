@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/Ranksy/ranksy-cli/compare/v0.7.0...v0.8.0) (2026-10-17)
+
+
+### Features
+
+* sync App Store ads from several Partners organizations ([#14](https://github.com/Ranksy/ranksy-cli/issues/14)) ([1c1736b](https://github.com/Ranksy/ranksy-cli/commit/1c1736b9fa0714f0822a69998bae2e2b077fb1df))
+
 ## [0.7.0](https://github.com/Ranksy/ranksy-cli/compare/v0.6.0...v0.7.0) (2026-10-16)
 
 
