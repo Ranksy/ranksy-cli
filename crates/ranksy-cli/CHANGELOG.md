@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/Ranksy/ranksy-cli/compare/v0.8.0...v0.9.0) (2026-10-17)
+
+
+### Features
+
+* generate the command reference with `ranksy docs markdown` ([#16](https://github.com/Ranksy/ranksy-cli/issues/16)) ([50414f7](https://github.com/Ranksy/ranksy-cli/commit/50414f77b88c3d7889c25212429f6e294ba3ebed))
+* sync one app with ranksy ads sync --only-app ([#18](https://github.com/Ranksy/ranksy-cli/issues/18)) ([040eb2d](https://github.com/Ranksy/ranksy-cli/commit/040eb2d2e197d1b2371abe769194e4795a581a0c))
+
 ## [0.8.0](https://github.com/Ranksy/ranksy-cli/compare/v0.7.0...v0.8.0) (2026-10-17)
 
 
