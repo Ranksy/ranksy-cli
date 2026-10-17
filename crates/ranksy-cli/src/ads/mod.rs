@@ -64,6 +64,7 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
         AdsCmd::Sync {
             chrome,
             org,
+            only_app,
             from,
             to,
             after,
@@ -77,8 +78,11 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
         } => {
             let ads = ctx.file.ads.clone().ok_or_else(|| anyhow!(NOT_CONNECTED))?;
             let orgs = sync::select_orgs(&ads, org.as_deref())?;
+            let only_apps = sync::select_apps(&ads, only_app)?;
+            let orgs = sync::orgs_with_apps(&ads, orgs, only_apps.as_deref(), org.as_deref())?;
             let (from, to) = sync::inclusive_bounds(*from, *to, *after, *before)?;
             let opts = sync::SyncOptions {
+                only_apps,
                 from,
                 to,
                 days: *days,

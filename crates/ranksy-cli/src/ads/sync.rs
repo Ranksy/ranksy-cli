@@ -10,7 +10,7 @@ use chrono::{Duration, NaiveDate};
 use futures_util::{StreamExt, TryStreamExt};
 use ranksy_api::ApiError;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Guards against a typo (`--from 0001-01-01`) turning into millions of Partners requests.
@@ -26,6 +26,8 @@ pub struct SyncOptions {
     pub dry_run: bool,
     pub resume: bool,
     pub out: PathBuf,
+    /// Config keys of the mapped apps picked with `--only-app` (sorted), or `None` for all.
+    pub only_apps: Option<Vec<String>>,
 }
 
 impl SyncOptions {
@@ -40,6 +42,7 @@ impl SyncOptions {
             dry_run: false,
             resume: false,
             out: super::default_cache_dir(),
+            only_apps: None,
         }
     }
 }
@@ -125,6 +128,131 @@ pub fn select_orgs(ads: &AdsConfig, org: Option<&str>) -> Result<Vec<String>> {
     }
 
     Ok(vec![org.to_string()])
+}
+
+/// Whether `value` names a mapped app: its Shopify app id (the config key, the Partners
+/// API key), its Ranksy app id or its Shopify app name, ignoring case.
+fn app_matches(key: &str, app: &AdsApp, value: &str) -> bool {
+    let value = value.trim().to_lowercase();
+
+    key.to_lowercase() == value
+        || app.ulid.to_lowercase() == value
+        || app
+            .name
+            .as_deref()
+            .is_some_and(|name| name.to_lowercase() == value)
+}
+
+/// One line per mapped app, for the "no such app" error.
+fn describe_apps(ads: &AdsConfig) -> String {
+    if ads.apps.is_empty() {
+        return "  none".to_string();
+    }
+
+    ads.apps
+        .iter()
+        .map(|(key, app)| {
+            let org = app
+                .org
+                .as_deref()
+                .map_or(String::new(), |o| format!(", org {o}"));
+            format!(
+                "  {}: Shopify app {key}, Ranksy app {}{org}",
+                app.name.as_deref().unwrap_or("(unnamed)"),
+                app.ulid
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The mapped apps (by config key, sorted) that the `--only-app` values pick, or `None`
+/// without the flag. A value that matches no mapped app is an error.
+pub fn select_apps(ads: &AdsConfig, only: &[String]) -> Result<Option<Vec<String>>> {
+    if only.is_empty() {
+        return Ok(None);
+    }
+    let mut keys = BTreeSet::new();
+    for value in only {
+        let matched: Vec<&String> = ads
+            .apps
+            .iter()
+            .filter(|(key, app)| app_matches(key, app, value))
+            .map(|(key, _)| key)
+            .collect();
+        if matched.is_empty() {
+            bail!(
+                "--only-app {value:?} matches no mapped app. Use a Ranksy app id, Shopify app id or Shopify app name. Mapped apps:\n{}",
+                describe_apps(ads)
+            );
+        }
+        keys.extend(matched.into_iter().cloned());
+    }
+
+    Ok(Some(keys.into_iter().collect()))
+}
+
+/// Keeps the organizations that hold at least one selected app. Without a filter every org stays.
+pub fn orgs_with_apps(
+    ads: &AdsConfig,
+    orgs: Vec<String>,
+    only: Option<&[String]>,
+    org_flag: Option<&str>,
+) -> Result<Vec<String>> {
+    let Some(only) = only else {
+        return Ok(orgs);
+    };
+    let kept: Vec<String> = orgs
+        .iter()
+        .filter(|org| !keys_for_org(ads, org, only).is_empty())
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        let scope = match org_flag {
+            Some(org) => format!("in organization {org}"),
+            None => "in any connected organization".to_string(),
+        };
+        bail!(
+            "--only-app matches no app {scope}. Mapped apps:\n{}",
+            describe_apps(ads)
+        );
+    }
+
+    Ok(kept)
+}
+
+/// The selected apps that belong to `org` (a legacy mapping without an org belongs to all).
+fn keys_for_org(ads: &AdsConfig, org: &str, only: &[String]) -> Vec<String> {
+    only.iter()
+        .filter(|key| ads.apps.get(*key).is_some_and(|app| app.in_org(org)))
+        .cloned()
+        .collect()
+}
+
+/// Whether a raw Partners campaign belongs to one of the selected apps (by API key, or by
+/// name when the mapping is keyed by name). The in-page JavaScript applies the same rule.
+fn campaign_selected(campaign: &Value, keys: &[String]) -> bool {
+    let field = |name: &str| {
+        campaign
+            .pointer(&format!("/app/{name}"))
+            .and_then(Value::as_str)
+    };
+
+    [field("apiKey"), field("name")]
+        .into_iter()
+        .flatten()
+        .any(|v| keys.iter().any(|k| k == v))
+}
+
+/// Raw campaigns of the selected apps only; everything when there is no filter.
+fn keep_apps(campaigns: Vec<Value>, only: Option<&[String]>) -> Vec<Value> {
+    match only {
+        Some(keys) => campaigns
+            .into_iter()
+            .filter(|c| campaign_selected(c, keys))
+            .collect(),
+        None => campaigns,
+    }
 }
 
 /// Raw day exports and payload files of one organization, so `--resume` never mixes them.
@@ -282,17 +410,34 @@ async fn sync_org_inner(
         },
     )
     .await?;
+    let only: Option<Vec<String>> = opts
+        .only_apps
+        .as_deref()
+        .map(|keys| keys_for_org(ads, &org, keys));
+    let only = only.as_deref();
     say(&format!(
-        "Partners org {org}; syncing {} back to {} ({} days, newest first)",
+        "Partners org {org}; syncing {} back to {} ({} days, newest first){}",
         days[0],
         days[days.len() - 1],
-        days.len()
+        days.len(),
+        only.map_or(String::new(), |keys| format!(
+            ", only {}",
+            keys.iter()
+                .map(|k| ads
+                    .apps
+                    .get(k)
+                    .and_then(|a| a.name.clone())
+                    .unwrap_or_else(|| k.clone()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     ));
 
     let partners::Snapshot {
         campaigns: snapshot,
         keyword_ideas,
-    } = partners::snapshot(tab, &org).await?;
+    } = partners::snapshot(tab, &org, only).await?;
+    let snapshot = keep_apps(snapshot, only);
     std::fs::write(
         dir.join("campaigns.json"),
         json!({ "campaigns": snapshot, "keyword_ideas": keyword_ideas }).to_string(),
@@ -321,7 +466,7 @@ async fn sync_org_inner(
             chunk[0],
             chunk[chunk.len() - 1]
         ));
-        let pulled = match pull_chunk(tab, &org, chunk, &dir, opts).await {
+        let pulled = match pull_chunk(tab, &org, chunk, &dir, opts, only).await {
             Ok(p) => p,
             Err(e) => {
                 pull_error = Some(e);
@@ -393,9 +538,10 @@ async fn pull_chunk(
     chunk: &[String],
     dir: &Path,
     opts: &SyncOptions,
+    only: Option<&[String]>,
 ) -> Result<Vec<Vec<Value>>> {
     futures_util::stream::iter(chunk)
-        .map(|day| pull_day_cached(tab, org, day, dir, opts.resume))
+        .map(|day| pull_day_cached(tab, org, day, dir, opts.resume, only))
         .buffered(opts.concurrency)
         .try_collect()
         .await
@@ -407,19 +553,19 @@ async fn pull_day_cached(
     day: &str,
     out: &Path,
     resume: bool,
+    only: Option<&[String]>,
 ) -> Result<Vec<Value>> {
-    let file = out.join(format!("{day}.json"));
     if resume {
-        if let Some(campaigns) = read_cached_day(&file) {
+        if let Some(campaigns) = load_cached_day(out, day, only) {
             log(&format!("{day}: cached"));
             return Ok(campaigns);
         }
     }
 
-    let campaigns = partners::pull_day(tab, org, day).await?;
+    let campaigns = keep_apps(partners::pull_day(tab, org, day, only).await?, only);
     std::fs::write(
-        &file,
-        json!({ "day": day, "org": org, "campaigns": campaigns }).to_string(),
+        day_file(out, day, only.is_some()),
+        day_json(org, day, &campaigns, only).to_string(),
     )?;
     let t = payload::summarize(&campaigns);
     log(&format!(
@@ -430,11 +576,57 @@ async fn pull_day_cached(
     Ok(campaigns)
 }
 
-fn read_cached_day(file: &Path) -> Option<Vec<Value>> {
+/// A day pulled for every app lives in `<day>.json`. A day pulled with `--only-app` lives in
+/// `<day>.only.json` and records its apps, so it can never be mistaken for a full day (and a
+/// filtered pull never overwrites a full one).
+fn day_file(dir: &Path, day: &str, filtered: bool) -> PathBuf {
+    if filtered {
+        return dir.join(format!("{day}.only.json"));
+    }
+
+    dir.join(format!("{day}.json"))
+}
+
+fn day_json(org: &str, day: &str, campaigns: &[Value], only: Option<&[String]>) -> Value {
+    let mut value = json!({ "day": day, "org": org, "campaigns": campaigns });
+    if let Some(keys) = only {
+        value["apps"] = json!(keys);
+    }
+
+    value
+}
+
+/// The cached campaigns of a day for the wanted apps, or `None` when the day must be pulled.
+/// A full day serves any filter (narrowed in memory). A filtered day serves only a filter
+/// whose apps it all contains. Neither serves a request for all apps.
+fn load_cached_day(dir: &Path, day: &str, only: Option<&[String]>) -> Option<Vec<Value>> {
+    if let Some((None, campaigns)) = read_cached_day(&day_file(dir, day, false)) {
+        return Some(keep_apps(campaigns, only));
+    }
+    let wanted = only?;
+    let (Some(apps), campaigns) = read_cached_day(&day_file(dir, day, true))? else {
+        return None;
+    };
+
+    wanted
+        .iter()
+        .all(|key| apps.contains(key))
+        .then(|| keep_apps(campaigns, only))
+}
+
+/// `(apps the file was pulled for, campaigns)`; the apps are `None` in a full day.
+fn read_cached_day(file: &Path) -> Option<(Option<Vec<String>>, Vec<Value>)> {
     let text = std::fs::read_to_string(file).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
+    let campaigns = value.get("campaigns").and_then(Value::as_array)?.clone();
+    let apps = value.get("apps").and_then(Value::as_array).map(|apps| {
+        apps.iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    });
 
-    value.get("campaigns").and_then(Value::as_array).cloned()
+    Some((apps, campaigns))
 }
 
 /// Pushes payloads to Ranksy and remembers what happened. Failures are recorded, never
@@ -749,6 +941,255 @@ mod tests {
         let out = Path::new("/cache/ads-export");
         assert_eq!(org_dir(out, "1"), Path::new("/cache/ads-export/1"));
         assert_ne!(org_dir(out, "1"), org_dir(out, "2"));
+    }
+
+    fn two_org_ads() -> AdsConfig {
+        let named = |ulid: &str, name: &str, org: &str| AdsApp {
+            ulid: ulid.into(),
+            name: Some(name.into()),
+            org: Some(org.into()),
+        };
+        AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            apps: BTreeMap::from([
+                ("key-a".to_string(), named("01AAA", "Block Country", "1")),
+                ("key-b".to_string(), named("01BBB", "Email Pro", "1")),
+                ("key-c".to_string(), named("01CCC", "Chat Tool", "2")),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn values(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_only_app_flag_means_no_filter() {
+        assert_eq!(select_apps(&two_org_ads(), &[]).unwrap(), None);
+    }
+
+    #[test]
+    fn only_app_matches_ranksy_id_shopify_id_or_name_ignoring_case() {
+        let ads = two_org_ads();
+        for value in ["01aaa", "KEY-A", "block country", " Block Country "] {
+            assert_eq!(
+                select_apps(&ads, &values(&[value])).unwrap(),
+                Some(values(&["key-a"])),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_app_is_repeatable_and_deduplicated() {
+        let picked =
+            select_apps(&two_org_ads(), &values(&["chat tool", "01AAA", "key-a"])).unwrap();
+        assert_eq!(picked, Some(values(&["key-a", "key-c"])));
+    }
+
+    #[test]
+    fn unknown_only_app_lists_the_mapped_apps() {
+        let err = select_apps(&two_org_ads(), &values(&["01AAA", "nope"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("\"nope\""));
+        assert!(err.contains("Block Country: Shopify app key-a, Ranksy app 01AAA, org 1"));
+        assert!(err.contains("Chat Tool: Shopify app key-c, Ranksy app 01CCC, org 2"));
+    }
+
+    #[test]
+    fn only_app_with_nothing_mapped_says_so() {
+        let err = select_apps(&AdsConfig::default(), &values(&["x"])).unwrap_err();
+        assert!(err.to_string().contains("none"));
+    }
+
+    #[test]
+    fn only_orgs_holding_a_selected_app_are_synced() {
+        let ads = two_org_ads();
+        let all = || vec!["1".to_string(), "2".to_string()];
+
+        let only = Some(values(&["key-c"]));
+        assert_eq!(
+            orgs_with_apps(&ads, all(), only.as_deref(), None).unwrap(),
+            ["2"]
+        );
+        let only = Some(values(&["key-a", "key-c"]));
+        assert_eq!(
+            orgs_with_apps(&ads, all(), only.as_deref(), None).unwrap(),
+            ["1", "2"]
+        );
+        assert_eq!(orgs_with_apps(&ads, all(), None, None).unwrap(), ["1", "2"]);
+    }
+
+    #[test]
+    fn only_app_and_org_intersect() {
+        let ads = two_org_ads();
+        let only = Some(values(&["key-c"]));
+        let orgs = select_orgs(&ads, Some("1")).unwrap();
+        let err = orgs_with_apps(&ads, orgs, only.as_deref(), Some("1")).unwrap_err();
+        assert!(err.to_string().contains("in organization 1"));
+
+        let orgs = select_orgs(&ads, Some("2")).unwrap();
+        assert_eq!(
+            orgs_with_apps(&ads, orgs, only.as_deref(), Some("2")).unwrap(),
+            ["2"]
+        );
+    }
+
+    #[test]
+    fn selected_apps_are_limited_to_the_org_being_synced() {
+        let ads = two_org_ads();
+        let only = values(&["key-a", "key-c"]);
+        assert_eq!(keys_for_org(&ads, "1", &only), ["key-a"]);
+        assert_eq!(keys_for_org(&ads, "2", &only), ["key-c"]);
+
+        // A legacy mapping without an org can be synced from any org.
+        let mut legacy = two_org_ads();
+        legacy.apps.insert("old".into(), mapped("01OLD", None));
+        assert_eq!(keys_for_org(&legacy, "2", &values(&["old"])), ["old"]);
+    }
+
+    fn raw_campaign(id: &str, key: &str, name: &str) -> Value {
+        json!({ "id": id, "app": { "apiKey": key, "name": name }, "metrics": { "impressions": 5 } })
+    }
+
+    #[test]
+    fn keep_apps_matches_by_api_key_or_name() {
+        let campaigns = vec![
+            raw_campaign("1", "key-a", "Block Country"),
+            raw_campaign("2", "key-b", "Email Pro"),
+            raw_campaign("3", "key-x", "Named App"),
+        ];
+        let ids = |kept: &[Value]| -> Vec<String> {
+            kept.iter()
+                .map(|c| c["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        assert_eq!(ids(&keep_apps(campaigns.clone(), None)), ["1", "2", "3"]);
+        // A mapping keyed by app name (older configs) still selects its campaigns.
+        let kept = keep_apps(campaigns, Some(&values(&["key-a", "Named App"])));
+        assert_eq!(ids(&kept), ["1", "3"]);
+    }
+
+    #[test]
+    fn payloads_built_from_a_filtered_pull_hold_only_the_selected_app() {
+        let only = values(&["key-a"]);
+        let snapshot = keep_apps(
+            vec![
+                raw_campaign("1", "key-a", "Block Country"),
+                raw_campaign("2", "key-b", "Email Pro"),
+            ],
+            Some(&only),
+        );
+        let day = keep_apps(
+            vec![
+                raw_campaign("1", "key-a", "Block Country"),
+                raw_campaign("2", "key-b", "Email Pro"),
+            ],
+            Some(&only),
+        );
+        let payloads = payload::build_payloads(
+            &snapshot,
+            &BTreeMap::new(),
+            &[("2026-10-15".to_string(), day)],
+        );
+        assert_eq!(payloads.keys().collect::<Vec<_>>(), ["key-a"]);
+        assert_eq!(payloads["key-a"].days.len(), 1);
+    }
+
+    fn cache_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ranksy-sync-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_day(dir: &Path, day: &str, campaigns: &[Value], only: Option<&[String]>) {
+        std::fs::write(
+            day_file(dir, day, only.is_some()),
+            day_json("1", day, campaigns, only).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn cached_ids(cached: Option<Vec<Value>>) -> Option<Vec<String>> {
+        cached.map(|c| {
+            c.iter()
+                .map(|c| c["id"].as_str().unwrap().to_string())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_full_cached_day_serves_every_request_narrowed_to_the_filter() {
+        let dir = cache_dir("full");
+        let both = [
+            raw_campaign("1", "key-a", "A"),
+            raw_campaign("2", "key-b", "B"),
+        ];
+        write_day(&dir, "2026-10-15", &both, None);
+
+        let all = cached_ids(load_cached_day(&dir, "2026-10-15", None));
+        assert_eq!(all.unwrap(), ["1", "2"]);
+        let only = values(&["key-b"]);
+        let one = cached_ids(load_cached_day(&dir, "2026-10-15", Some(&only)));
+        assert_eq!(one.unwrap(), ["2"]);
+        assert!(load_cached_day(&dir, "2026-10-14", None).is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_filtered_cached_day_never_serves_a_full_request() {
+        let dir = cache_dir("filtered");
+        let only = values(&["key-a"]);
+        write_day(
+            &dir,
+            "2026-10-15",
+            &[raw_campaign("1", "key-a", "A")],
+            Some(&only),
+        );
+
+        // Same filter: hit. Full request: miss, and the full file is not touched.
+        let hit = cached_ids(load_cached_day(&dir, "2026-10-15", Some(&only)));
+        assert_eq!(hit.unwrap(), ["1"]);
+        assert!(load_cached_day(&dir, "2026-10-15", None).is_none());
+        assert!(!day_file(&dir, "2026-10-15", false).exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_filtered_cached_day_serves_only_filters_it_covers() {
+        let dir = cache_dir("covers");
+        let both = values(&["key-a", "key-b"]);
+        let campaigns = [
+            raw_campaign("1", "key-a", "A"),
+            raw_campaign("2", "key-b", "B"),
+        ];
+        write_day(&dir, "2026-10-15", &campaigns, Some(&both));
+
+        let subset = values(&["key-b"]);
+        let hit = cached_ids(load_cached_day(&dir, "2026-10-15", Some(&subset)));
+        assert_eq!(hit.unwrap(), ["2"]);
+        let wider = values(&["key-a", "key-c"]);
+        assert!(load_cached_day(&dir, "2026-10-15", Some(&wider)).is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_cached_day_from_before_the_filter_existed_counts_as_full() {
+        let dir = cache_dir("legacy");
+        std::fs::write(
+            dir.join("2026-10-15.json"),
+            json!({ "day": "2026-10-15", "org": "1", "campaigns": [raw_campaign("1", "key-a", "A")] }).to_string(),
+        )
+        .unwrap();
+
+        assert!(load_cached_day(&dir, "2026-10-15", None).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
