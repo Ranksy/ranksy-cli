@@ -109,9 +109,40 @@ pub fn day_range(
     Ok(out)
 }
 
-/// The Ranksy app a Shopify app (by Partners API key, or by name) is mapped to.
-pub fn lookup_app<'a>(ads: &'a AdsConfig, api_key: &str, name: &str) -> Option<&'a AdsApp> {
-    ads.apps.get(api_key).or_else(|| ads.apps.get(name))
+/// The Partners organizations to sync: all connected ones, or just `--org`.
+pub fn select_orgs(ads: &AdsConfig, org: Option<&str>) -> Result<Vec<String>> {
+    if ads.orgs.is_empty() {
+        bail!(super::NOT_CONNECTED);
+    }
+    let Some(org) = org else {
+        return Ok(ads.orgs.clone());
+    };
+    if !ads.orgs.iter().any(|o| o == org) {
+        bail!(
+            "Partners organization {org} is not connected (connected: {}). Run `ranksy ads connect --org {org}` to add it.",
+            super::describe_orgs(&ads.orgs)
+        );
+    }
+
+    Ok(vec![org.to_string()])
+}
+
+/// Raw day exports and payload files of one organization, so `--resume` never mixes them.
+pub fn org_dir(out: &Path, org: &str) -> PathBuf {
+    out.join(org)
+}
+
+/// The Ranksy app a Shopify app (by Partners API key, or by name) in `org` is mapped to.
+pub fn lookup_app<'a>(
+    ads: &'a AdsConfig,
+    org: &str,
+    api_key: &str,
+    name: &str,
+) -> Option<&'a AdsApp> {
+    ads.apps
+        .get(api_key)
+        .or_else(|| ads.apps.get(name))
+        .filter(|app| app.in_org(org))
 }
 
 /// Human message for a failed sync POST, and whether retrying other batches for the app is pointless.
@@ -153,16 +184,18 @@ impl Totals {
     }
 }
 
+/// Syncs `orgs` one after the other in a single Chrome tab. A failing org is reported and
+/// the next one still runs; the error at the end names every org that failed.
 pub async fn run(
     ctx: &Ctx,
     ads: &AdsConfig,
     chrome: ChromeOptions,
     opts: &SyncOptions,
+    orgs: &[String],
 ) -> Result<()> {
-    let org = ads
-        .org
-        .clone()
-        .ok_or_else(|| anyhow!(super::NOT_CONNECTED))?;
+    let Some(first) = orgs.first() else {
+        bail!(super::NOT_CONNECTED);
+    };
     if !opts.dry_run && ads.apps.is_empty() {
         bail!("{} (no apps are mapped yet)", super::NOT_CONNECTED);
     }
@@ -179,20 +212,77 @@ pub async fn run(
     )?;
     let days: Vec<String> = days.iter().map(NaiveDate::to_string).collect();
 
-    std::fs::create_dir_all(&opts.out)
-        .with_context(|| format!("cannot create {}", opts.out.display()))?;
+    let tab = partners::open_tab(&chrome, &partners::ads_url(first)).await?;
+    let mut overall = Totals::default();
+    let mut failed: Vec<&str> = Vec::new();
+    for org in orgs {
+        let outcome = sync_org(&tab, client.as_ref(), ads, org, &days, opts).await;
+        overall.merge(&outcome.totals);
+        if let Some(e) = outcome.error {
+            eprintln!("org {org} failed: {e:#}");
+            failed.push(org);
+        }
+    }
+    tab.close().await;
 
-    let tab = partners::open_tab(&chrome, &partners::ads_url(&org)).await?;
+    if orgs.len() > 1 && !opts.dry_run && !super::is_quiet() {
+        println!(
+            "Total, all organizations: {} campaign-days stored, {} search terms, {} breakdown rows, {} CSV reports replaced",
+            overall.stored, overall.search_terms, overall.breakdown_rows, overall.csv_replaced
+        );
+    }
+    if !failed.is_empty() {
+        bail!("sync failed for organization(s): {}", failed.join(", "));
+    }
+
+    Ok(())
+}
+
+struct OrgOutcome {
+    totals: Totals,
+    error: Option<anyhow::Error>,
+}
+
+/// One organization: log in (or switch to it), pull its days, push the apps that belong to it.
+async fn sync_org(
+    tab: &super::cdp::Tab,
+    client: Option<&ranksy_api::RanksyClient>,
+    ads: &AdsConfig,
+    org: &str,
+    days: &[String],
+    opts: &SyncOptions,
+) -> OrgOutcome {
+    let mut totals = Totals::default();
+    let error = sync_org_inner(tab, client, ads, org, days, opts, &mut totals)
+        .await
+        .err();
+
+    OrgOutcome { totals, error }
+}
+
+async fn sync_org_inner(
+    tab: &super::cdp::Tab,
+    client: Option<&ranksy_api::RanksyClient>,
+    ads: &AdsConfig,
+    org: &str,
+    days: &[String],
+    opts: &SyncOptions,
+    overall: &mut Totals,
+) -> Result<()> {
+    let say = |msg: &str| log(&format!("[{org}] {msg}"));
+    let dir = org_dir(&opts.out, org);
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+
     let org = partners::wait_for_login(
-        &tab,
+        tab,
         partners::LoginWait {
             timeout_secs: partners::SYNC_LOGIN_TIMEOUT_SECS,
-            wanted_org: Some(&org),
+            wanted_org: Some(org),
             interactive: false,
         },
     )
     .await?;
-    log(&format!(
+    say(&format!(
         "Partners org {org}; syncing {} back to {} ({} days, newest first)",
         days[0],
         days[days.len() - 1],
@@ -202,12 +292,12 @@ pub async fn run(
     let partners::Snapshot {
         campaigns: snapshot,
         keyword_ideas,
-    } = partners::snapshot(&tab, &org).await?;
+    } = partners::snapshot(tab, &org).await?;
     std::fs::write(
-        opts.out.join("campaigns.json"),
+        dir.join("campaigns.json"),
         json!({ "campaigns": snapshot, "keyword_ideas": keyword_ideas }).to_string(),
     )?;
-    log(&format!(
+    say(&format!(
         "Snapshot: {} campaigns ({} archived)",
         snapshot.len(),
         snapshot
@@ -216,7 +306,7 @@ pub async fn run(
             .count()
     ));
 
-    let mut pusher = client.as_ref().map(Pusher::new);
+    let mut pusher = client.map(Pusher::new);
     let mut skipped_logged: HashSet<String> = HashSet::new();
     let mut pull_error: Option<anyhow::Error> = None;
 
@@ -224,14 +314,14 @@ pub async fn run(
     // while a backfill keeps walking back in time.
     let chunks: Vec<&[String]> = days.chunks(opts.chunk_days).collect();
     for (i, chunk) in chunks.iter().enumerate() {
-        log(&format!(
+        say(&format!(
             "chunk {}/{}: {}..{}",
             i + 1,
             chunks.len(),
             chunk[0],
             chunk[chunk.len() - 1]
         ));
-        let pulled = match pull_chunk(&tab, &org, chunk, opts).await {
+        let pulled = match pull_chunk(tab, &org, chunk, &dir, opts).await {
             Ok(p) => p,
             Err(e) => {
                 pull_error = Some(e);
@@ -242,7 +332,7 @@ pub async fn run(
         let pulled: Vec<(String, Vec<Value>)> = chunk.iter().cloned().zip(pulled).collect();
         for (api_key, app) in payload::build_payloads(&snapshot, &keyword_ideas, &pulled) {
             if opts.dry_run {
-                let file = opts.out.join(format!(
+                let file = dir.join(format!(
                     "payload-{}-{}.json",
                     payload::slug(&app.name),
                     chunk[0]
@@ -252,7 +342,7 @@ pub async fn run(
                     json!({ "campaigns": app.campaigns, "keyword_ideas": app.keyword_ideas, "days": app.days })
                         .to_string(),
                 )?;
-                log(&format!(
+                say(&format!(
                     "  {}: {} campaigns, {} campaign-days -> {}",
                     app.name,
                     app.campaigns.len(),
@@ -261,10 +351,10 @@ pub async fn run(
                 ));
                 continue;
             }
-            let Some(target) = lookup_app(ads, &api_key, &app.name) else {
+            let Some(target) = lookup_app(ads, &org, &api_key, &app.name) else {
                 if skipped_logged.insert(api_key.clone()) {
-                    log(&format!(
-                        "skip \"{}\": not mapped to a Ranksy app (run `ranksy ads connect`)",
+                    say(&format!(
+                        "skip \"{}\": not mapped to a Ranksy app (run `ranksy ads connect --org {org}`)",
                         app.name
                     ));
                 }
@@ -276,10 +366,12 @@ pub async fn run(
         }
     }
 
-    tab.close().await;
-    log(&format!("Done. Raw exports in {}", opts.out.display()));
+    say(&format!("Done. Raw exports in {}", dir.display()));
     let (totals, failures) = pusher.map(|p| (p.totals, p.failures)).unwrap_or_default();
-    print_summary(&totals, ads, &snapshot, opts.dry_run);
+    print_summary(&org, &totals, ads, &snapshot, opts.dry_run);
+    for t in totals.values() {
+        overall.merge(t);
+    }
 
     if let Some(e) = pull_error {
         return Err(e);
@@ -299,10 +391,11 @@ async fn pull_chunk(
     tab: &super::cdp::Tab,
     org: &str,
     chunk: &[String],
+    dir: &Path,
     opts: &SyncOptions,
 ) -> Result<Vec<Vec<Value>>> {
     futures_util::stream::iter(chunk)
-        .map(|day| pull_day_cached(tab, org, day, &opts.out, opts.resume))
+        .map(|day| pull_day_cached(tab, org, day, dir, opts.resume))
         .buffered(opts.concurrency)
         .try_collect()
         .await
@@ -441,6 +534,7 @@ impl<'a> Pusher<'a> {
 }
 
 fn print_summary(
+    org: &str,
     totals: &BTreeMap<String, Totals>,
     ads: &AdsConfig,
     snapshot: &[Value],
@@ -449,9 +543,9 @@ fn print_summary(
     if dry_run || super::is_quiet() {
         return;
     }
-    println!("Summary:");
+    println!("[{org}] Summary:");
     if totals.is_empty() {
-        println!("  nothing was sent to Ranksy");
+        println!("[{org}]   nothing was sent to Ranksy");
     }
     for (api_key, t) in totals {
         let name = ads
@@ -468,7 +562,7 @@ fn print_summary(
             })
             .unwrap_or_else(|| api_key.clone());
         println!(
-            "  {name}: {} campaign-days stored, {} search terms, {} breakdown rows, {} CSV reports replaced",
+            "[{org}]   {name}: {} campaign-days stored, {} search terms, {} breakdown rows, {} CSV reports replaced",
             t.stored, t.search_terms, t.breakdown_rows, t.csv_replaced
         );
     }
@@ -574,30 +668,87 @@ mod tests {
         assert_eq!(chunks[1], ["2026-10-08", "2026-10-07", "2026-10-06"]);
     }
 
+    fn mapped(ulid: &str, org: Option<&str>) -> AdsApp {
+        AdsApp {
+            ulid: ulid.into(),
+            name: None,
+            org: org.map(str::to_string),
+        }
+    }
+
     #[test]
     fn looks_up_app_by_api_key_then_name() {
         let ads = AdsConfig {
+            orgs: vec!["1".into()],
             apps: BTreeMap::from([
-                (
-                    "key1".to_string(),
-                    AdsApp {
-                        ulid: "01A".into(),
-                        name: None,
-                    },
-                ),
-                (
-                    "Named App".to_string(),
-                    AdsApp {
-                        ulid: "01B".into(),
-                        name: None,
-                    },
-                ),
+                ("key1".to_string(), mapped("01A", None)),
+                ("Named App".to_string(), mapped("01B", None)),
             ]),
             ..Default::default()
         };
-        assert_eq!(lookup_app(&ads, "key1", "Whatever").unwrap().ulid, "01A");
-        assert_eq!(lookup_app(&ads, "other", "Named App").unwrap().ulid, "01B");
-        assert!(lookup_app(&ads, "other", "Nope").is_none());
+        assert_eq!(
+            lookup_app(&ads, "1", "key1", "Whatever").unwrap().ulid,
+            "01A"
+        );
+        assert_eq!(
+            lookup_app(&ads, "1", "other", "Named App").unwrap().ulid,
+            "01B"
+        );
+        assert!(lookup_app(&ads, "1", "other", "Nope").is_none());
+    }
+
+    #[test]
+    fn only_apps_of_the_synced_org_are_pushed() {
+        let ads = AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            apps: BTreeMap::from([
+                ("a".to_string(), mapped("01A", Some("1"))),
+                ("b".to_string(), mapped("01B", Some("2"))),
+                ("legacy".to_string(), mapped("01L", None)),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(lookup_app(&ads, "1", "a", "A").unwrap().ulid, "01A");
+        assert!(lookup_app(&ads, "1", "b", "B").is_none());
+        assert_eq!(lookup_app(&ads, "2", "b", "B").unwrap().ulid, "01B");
+        assert!(lookup_app(&ads, "2", "a", "A").is_none());
+        // A mapping without an org (older config) is looked up by API key in any org.
+        assert_eq!(lookup_app(&ads, "1", "legacy", "L").unwrap().ulid, "01L");
+        assert_eq!(lookup_app(&ads, "2", "legacy", "L").unwrap().ulid, "01L");
+    }
+
+    #[test]
+    fn selects_every_org_without_a_flag_and_one_with_it() {
+        let ads = AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            ..Default::default()
+        };
+        assert_eq!(select_orgs(&ads, None).unwrap(), ["1", "2"]);
+        assert_eq!(select_orgs(&ads, Some("2")).unwrap(), ["2"]);
+    }
+
+    #[test]
+    fn unknown_org_flag_lists_the_connected_orgs() {
+        let ads = AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            ..Default::default()
+        };
+        let err = select_orgs(&ads, Some("9")).unwrap_err().to_string();
+        assert!(err.contains("9") && err.contains("1, 2"));
+    }
+
+    #[test]
+    fn selecting_orgs_needs_a_connection() {
+        let err = select_orgs(&AdsConfig::default(), None).unwrap_err();
+        assert!(err.to_string().contains("ranksy ads connect"));
+        assert!(select_orgs(&AdsConfig::default(), Some("1")).is_err());
+    }
+
+    #[test]
+    fn each_org_caches_in_its_own_folder() {
+        let out = Path::new("/cache/ads-export");
+        assert_eq!(org_dir(out, "1"), Path::new("/cache/ads-export/1"));
+        assert_ne!(org_dir(out, "1"), org_dir(out, "2"));
     }
 
     #[test]

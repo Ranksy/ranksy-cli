@@ -3,14 +3,13 @@
 use super::chrome::ChromeOptions;
 use super::partners::{self, PartnersApp};
 use super::sync::{self, SyncOptions};
-use super::{chrome_options, default_profile, ranksy_error, Ctx, DEFAULT_PORT};
+use super::{chrome_options, default_profile, describe_orgs, ranksy_error, Ctx, DEFAULT_PORT};
 use crate::cli::ChromeArgs;
 use crate::config::{self, AdsApp, AdsConfig};
 use anyhow::{anyhow, bail, Context, Result};
 use dialoguer::{Confirm, FuzzySelect};
 use ranksy_api::RanksyClient;
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 const SKIP_LABEL: &str = "Skip (don't sync this app)";
 
@@ -75,19 +74,32 @@ pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) ->
     println!("\nSaved to {}", config::config_path().display());
     print_mapping(&choices);
 
-    if ads.apps.is_empty() {
-        println!("\nNo apps are mapped, so `ranksy ads sync` has nothing to do. Re-run `ranksy ads connect` to map them.");
+    println!(
+        "\nConnected Partners organizations: {}.\n`ranksy ads sync` syncs all of them. To add another, run `ranksy ads connect --org <id>`.",
+        describe_orgs(&ads.orgs)
+    );
+    if !ads.apps.values().any(|a| a.in_org(&org)) {
+        println!("\nNo apps are mapped in organization {org}, so there is nothing to sync for it. Re-run `ranksy ads connect --org {org}` to map them.");
         return Ok(());
     }
     println!("\nNext: `ranksy ads sync` (cron: `0 6 * * * ranksy ads sync`).");
 
     let run_now = Confirm::new()
-        .with_prompt("Run the first sync now (last 3 complete days)?")
+        .with_prompt(format!(
+            "Run the first sync for organization {org} now (last 3 complete days)?"
+        ))
         .default(false)
         .interact()
         .unwrap_or(false);
     if run_now {
-        sync::run(ctx, &ads, opts, &SyncOptions::first_run()).await?;
+        sync::run(
+            ctx,
+            &ads,
+            opts,
+            &SyncOptions::first_run(),
+            std::slice::from_ref(&org),
+        )
+        .await?;
     }
 
     Ok(())
@@ -157,39 +169,49 @@ pub fn preselect(
     }
 }
 
-/// The `[ads]` table to save: keeps earlier mappings for Shopify apps not seen this time,
-/// replaces the ones that were, and drops apps that were skipped.
+/// The `[ads]` table to save: adds `org` to the connected ones (keeping the others and their
+/// mappings), keeps earlier mappings for Shopify apps not seen this time, replaces the ones
+/// that were, and drops apps that were skipped.
 pub fn build_ads_config(
     existing: Option<&AdsConfig>,
     org: &str,
     opts: &ChromeOptions,
     choices: &[(PartnersApp, Option<RanksyApp>)],
 ) -> AdsConfig {
-    let mut apps: BTreeMap<String, AdsApp> = existing.map(|a| a.apps.clone()).unwrap_or_default();
+    let mut ads = existing.cloned().unwrap_or_default();
+
+    // Mappings from before multi-org support belong to the one org connected then.
+    if let [only] = ads.orgs.as_slice() {
+        let only = only.clone();
+        for app in ads.apps.values_mut() {
+            app.org.get_or_insert_with(|| only.clone());
+        }
+    }
+    ads.add_org(org);
+
     for (partners_app, ranksy_app) in choices {
         match ranksy_app {
             Some(r) => {
-                apps.insert(
+                ads.apps.insert(
                     partners_app.api_key.clone(),
                     AdsApp {
                         ulid: r.ulid.clone(),
                         name: Some(partners_app.name.clone()),
+                        org: Some(org.to_string()),
                     },
                 );
             }
             None => {
-                apps.remove(&partners_app.api_key);
+                ads.apps.remove(&partners_app.api_key);
             }
         }
     }
 
-    AdsConfig {
-        org: Some(org.to_string()),
-        chrome_profile: (opts.profile != default_profile())
-            .then(|| opts.profile.display().to_string()),
-        port: (opts.port != DEFAULT_PORT).then_some(opts.port),
-        apps,
-    }
+    ads.chrome_profile =
+        (opts.profile != default_profile()).then(|| opts.profile.display().to_string());
+    ads.port = (opts.port != DEFAULT_PORT).then_some(opts.port);
+
+    ads
 }
 
 fn print_mapping(choices: &[(PartnersApp, Option<RanksyApp>)]) {
@@ -258,6 +280,23 @@ fn has_more(response: &Value, page: u32) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn mapped(ulid: &str, org: Option<&str>) -> AdsApp {
+        AdsApp {
+            ulid: ulid.into(),
+            name: None,
+            org: org.map(str::to_string),
+        }
+    }
+
+    fn default_opts() -> ChromeOptions {
+        ChromeOptions {
+            bin: None,
+            port: DEFAULT_PORT,
+            profile: default_profile(),
+        }
+    }
 
     fn apps() -> Vec<RanksyApp> {
         vec![
@@ -290,19 +329,13 @@ mod tests {
 
     #[test]
     fn preselect_prefers_existing_mapping() {
-        let existing = AdsApp {
-            ulid: "01B".into(),
-            name: None,
-        };
+        let existing = mapped("01B", None);
         assert_eq!(
             preselect("Block Country", Some(&existing), &apps()),
             Some(1)
         );
         // A mapping to an app that's no longer visible falls back to the name match.
-        let gone = AdsApp {
-            ulid: "01Z".into(),
-            name: None,
-        };
+        let gone = mapped("01Z", None);
         assert_eq!(preselect("Block Country", Some(&gone), &apps()), Some(0));
     }
 
@@ -329,17 +362,12 @@ mod tests {
 
     #[test]
     fn builds_config_with_non_default_chrome_settings_only() {
-        let default_opts = ChromeOptions {
-            bin: None,
-            port: DEFAULT_PORT,
-            profile: default_profile(),
-        };
         let choices = vec![
             (partners("k1", "App One"), Some(apps()[0].clone())),
             (partners("k2", "App Two"), None),
         ];
-        let ads = build_ads_config(None, "777", &default_opts, &choices);
-        assert_eq!(ads.org.as_deref(), Some("777"));
+        let ads = build_ads_config(None, "777", &default_opts(), &choices);
+        assert_eq!(ads.orgs, ["777"]);
         assert_eq!(ads.chrome_profile, None);
         assert_eq!(ads.port, None);
         assert_eq!(ads.apps.len(), 1);
@@ -347,7 +375,8 @@ mod tests {
             ads.apps["k1"],
             AdsApp {
                 ulid: "01A".into(),
-                name: Some("App One".into())
+                name: Some("App One".into()),
+                org: Some("777".into())
             }
         );
 
@@ -366,36 +395,70 @@ mod tests {
     #[test]
     fn reconnecting_keeps_unseen_mappings_and_drops_skipped_ones() {
         let existing = AdsConfig {
-            org: Some("1".into()),
+            orgs: vec!["1".into()],
             apps: BTreeMap::from([
-                (
-                    "old".to_string(),
-                    AdsApp {
-                        ulid: "01OLD".into(),
-                        name: None,
-                    },
-                ),
-                (
-                    "k2".to_string(),
-                    AdsApp {
-                        ulid: "01B".into(),
-                        name: None,
-                    },
-                ),
+                ("old".to_string(), mapped("01OLD", Some("1"))),
+                ("k2".to_string(), mapped("01B", Some("1"))),
             ]),
             ..Default::default()
-        };
-        let opts = ChromeOptions {
-            bin: None,
-            port: DEFAULT_PORT,
-            profile: default_profile(),
         };
         let choices = vec![
             (partners("k1", "App One"), Some(apps()[0].clone())),
             (partners("k2", "App Two"), None),
         ];
-        let ads = build_ads_config(Some(&existing), "1", &opts, &choices);
+        let ads = build_ads_config(Some(&existing), "1", &default_opts(), &choices);
+        assert_eq!(ads.orgs, ["1"]);
         assert_eq!(ads.apps.keys().collect::<Vec<_>>(), ["k1", "old"]);
+    }
+
+    #[test]
+    fn connecting_a_second_org_keeps_the_first_orgs_mappings() {
+        let existing = AdsConfig {
+            orgs: vec!["1".into()],
+            apps: BTreeMap::from([
+                ("a".to_string(), mapped("01A", Some("1"))),
+                // Written before multi-org support: it belongs to the only org then.
+                ("legacy".to_string(), mapped("01L", None)),
+            ]),
+            ..Default::default()
+        };
+        let choices = vec![(partners("b", "App B"), Some(apps()[1].clone()))];
+        let ads = build_ads_config(Some(&existing), "2", &default_opts(), &choices);
+
+        assert_eq!(ads.orgs, ["1", "2"]);
+        assert_eq!(ads.apps.keys().collect::<Vec<_>>(), ["a", "b", "legacy"]);
+        assert_eq!(ads.apps["a"].org.as_deref(), Some("1"));
+        assert_eq!(ads.apps["legacy"].org.as_deref(), Some("1"));
+        assert_eq!(ads.apps["b"].org.as_deref(), Some("2"));
+        assert_eq!(ads.apps["b"].ulid, "01B");
+    }
+
+    #[test]
+    fn reconnecting_an_org_does_not_duplicate_it() {
+        let existing = AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            apps: BTreeMap::from([("a".to_string(), mapped("01A", Some("1")))]),
+            ..Default::default()
+        };
+        let ads = build_ads_config(Some(&existing), "1", &default_opts(), &[]);
+        assert_eq!(ads.orgs, ["1", "2"]);
+        assert_eq!(ads.apps.len(), 1);
+    }
+
+    #[test]
+    fn skipping_an_app_removes_only_its_mapping() {
+        let existing = AdsConfig {
+            orgs: vec!["1".into(), "2".into()],
+            apps: BTreeMap::from([
+                ("a".to_string(), mapped("01A", Some("1"))),
+                ("b".to_string(), mapped("01B", Some("2"))),
+            ]),
+            ..Default::default()
+        };
+        let choices = vec![(partners("b", "App B"), None)];
+        let ads = build_ads_config(Some(&existing), "2", &default_opts(), &choices);
+        assert_eq!(ads.apps.keys().collect::<Vec<_>>(), ["a"]);
+        assert_eq!(ads.orgs, ["1", "2"]);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 mod cdp;
 mod chrome;
 mod connect;
+mod disconnect;
 mod partners;
 mod payload;
 mod sync;
@@ -59,8 +60,10 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
 
     match cmd {
         AdsCmd::Connect { chrome, org } => connect::run(&ctx, chrome, org.as_deref()).await,
+        AdsCmd::Disconnect { org } => disconnect::run(&ctx, org),
         AdsCmd::Sync {
             chrome,
+            org,
             from,
             to,
             after,
@@ -73,6 +76,7 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
             out,
         } => {
             let ads = ctx.file.ads.clone().ok_or_else(|| anyhow!(NOT_CONNECTED))?;
+            let orgs = sync::select_orgs(&ads, org.as_deref())?;
             let (from, to) = sync::inclusive_bounds(*from, *to, *after, *before)?;
             let opts = sync::SyncOptions {
                 from,
@@ -85,9 +89,18 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
                 out: out.clone().unwrap_or_else(default_cache_dir),
             };
 
-            sync::run(&ctx, &ads, chrome_options(chrome, Some(&ads)), &opts).await
+            sync::run(&ctx, &ads, chrome_options(chrome, Some(&ads)), &opts, &orgs).await
         }
     }
+}
+
+/// "1, 2" for messages, or "none".
+fn describe_orgs(orgs: &[String]) -> String {
+    if orgs.is_empty() {
+        return "none".to_string();
+    }
+
+    orgs.join(", ")
 }
 
 /// Flags win over the `[ads]` config, which wins over the defaults.
@@ -187,6 +200,12 @@ mod tests {
 
         let o = chrome_options(&args(None, None), None);
         assert_eq!((o.port, o.profile), (DEFAULT_PORT, default_profile()));
+    }
+
+    #[test]
+    fn describes_orgs() {
+        assert_eq!(describe_orgs(&[]), "none");
+        assert_eq!(describe_orgs(&["1".into(), "2".into()]), "1, 2");
     }
 
     #[test]
