@@ -1,6 +1,7 @@
 mod ads;
 mod cli;
 mod config;
+mod docs;
 mod output;
 mod run;
 

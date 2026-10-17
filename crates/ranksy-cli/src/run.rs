@@ -18,6 +18,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         return run_update(*check, cli.quiet).await;
     }
 
+    if let Commands::Docs { cmd: crate::cli::DocsCmd::Markdown } = &cli.command {
+        print!("{}", crate::docs::markdown());
+        return Ok(());
+    }
+
     let file = config::load();
 
     // ads resolves the key itself: `ads sync --dry-run` works without one.
@@ -63,7 +68,9 @@ async fn dispatch(
     use crate::cli::*;
     let need_app = || app.ok_or_else(|| anyhow!("no app selected. Pass --app <id> or set it in config."));
     let (value, columns) = match command {
-        Commands::Login { .. } | Commands::Update { .. } | Commands::Ads { .. } => unreachable!("handled earlier"),
+        Commands::Login { .. } | Commands::Update { .. } | Commands::Ads { .. } | Commands::Docs { .. } => {
+            unreachable!("handled earlier")
+        }
         Commands::Whoami => (
             client.whoami().await?,
             vec![col("Ulid", "ulid"), col("Slug", "slug"), col("Name", "name")],
