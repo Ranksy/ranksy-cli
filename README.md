@@ -103,6 +103,17 @@ ranksy ads sync      # last 3 complete days; safe to re-run, re-pushed days are 
 0 6 * * * ranksy ads sync -q
 ```
 
+If your Shopify apps live in several Partners organizations, connect each one
+once; `sync` then covers all of them:
+
+```bash
+ranksy ads connect --org 1234567    # add the first organization
+ranksy ads connect --org 7654321    # add another; the first stays connected
+ranksy ads sync                     # syncs every connected organization, one after the other
+ranksy ads sync --org 7654321       # only that organization
+ranksy ads disconnect --org 7654321 # stop syncing it and forget its app mappings
+```
+
 - Partners sits behind Cloudflare and a captcha, so `ads` drives a real Chrome
   window over its debug port. The login stays in a dedicated profile
   (`<data dir>/partners-chrome`); `ranksy` never sees your Shopify password or
@@ -110,7 +121,10 @@ ranksy ads sync      # last 3 complete days; safe to re-run, re-pushed days are 
   (`--chrome` or `CHROME_BIN` to point at a specific binary).
 - `connect` opens Chrome, waits for you to log in (up to 10 minutes), and asks
   which Ranksy app each Shopify app should be imported into. The mapping is
-  saved under `[ads]` in `~/.config/ranksy/config.toml`.
+  saved under `[ads]` in `~/.config/ranksy/config.toml` (`orgs = [...]` lists the
+  connected organizations; a config with the older single `org = "..."` key keeps
+  working and is rewritten as `orgs` the next time it is saved). Connecting
+  another organization adds to the list; it never replaces the others.
 - `sync` opens (or reuses) the same Chrome. If the Partners session has expired,
   or the captcha shows up again, it exits non-zero with "Partners session
   expired". Run `ranksy ads connect` and log in again.
@@ -125,8 +139,10 @@ ranksy ads sync      # last 3 complete days; safe to re-run, re-pushed days are 
   February. `--after` alone runs up to yesterday. Raw day
   exports are cached in `--out` (default `<cache dir>/ads-export`); `--resume`
   reuses them. `--dry-run` pulls and writes the payload files without posting.
-- Exit code is non-zero if any request to Ranksy failed. The other apps still
-  run, and failures are listed at the end.
+  With several organizations, each one gets its own subfolder (`<out>/<org>/`).
+- Exit code is non-zero if any request to Ranksy failed, or if an organization
+  failed (for example, its Partners session expired). The other apps and
+  organizations still run, and the failures are listed at the end.
 
 ## Development
 

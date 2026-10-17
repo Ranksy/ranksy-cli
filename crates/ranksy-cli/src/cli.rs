@@ -115,18 +115,29 @@ pub struct ChromeArgs {
 
 #[derive(Subcommand)]
 pub enum AdsCmd {
-    /// Log in to Shopify Partners once and map your Shopify apps to Ranksy apps (interactive).
+    /// Log in to Shopify Partners and map the Shopify apps of one organization to Ranksy apps
+    /// (interactive). Run it once per Partners organization; each run adds to the connected ones.
     Connect {
         #[command(flatten)]
         chrome: ChromeArgs,
-        /// Partners organization id (default: detected after login; asked when you have several).
+        /// Partners organization id to add (default: detected after login; asked when you have several).
         #[arg(long)]
         org: Option<String>,
     },
+    /// Stop syncing a Partners organization and forget its app mappings.
+    Disconnect {
+        /// Partners organization id to remove.
+        #[arg(long)]
+        org: String,
+    },
     /// Pull ads data from Shopify Partners and push it to Ranksy (non-interactive; for cron).
+    /// Syncs every connected organization, one after the other, unless --org picks one.
     Sync {
         #[command(flatten)]
         chrome: ChromeArgs,
+        /// Only sync this connected Partners organization (default: all of them).
+        #[arg(long)]
+        org: Option<String>,
         /// First day to pull, YYYY-MM-DD (default: --days before --to).
         #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date)]
         from: Option<NaiveDate>,
@@ -154,7 +165,7 @@ pub enum AdsCmd {
         /// Reuse days already pulled into --out instead of pulling them again.
         #[arg(long)]
         resume: bool,
-        /// Directory for the raw day exports and payload files (default: <cache dir>/ads-export).
+        /// Directory for the raw day exports and payload files, one subfolder per organization (default: <cache dir>/ads-export).
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },

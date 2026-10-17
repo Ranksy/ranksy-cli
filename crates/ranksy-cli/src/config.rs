@@ -21,19 +21,61 @@ pub struct ConfigFile {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RawAdsConfig")]
 pub struct AdsConfig {
-    /// Shopify Partners organization id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub org: Option<String>,
+    /// Connected Shopify Partners organization ids; `ranksy ads sync` syncs all of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub orgs: Vec<String>,
     /// Chrome profile dir; only stored when it differs from the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chrome_profile: Option<String>,
     /// Chrome debug port; only stored when it differs from the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// Shopify app (Partners app API key) -> Ranksy app.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub apps: BTreeMap<String, AdsApp>,
+}
+
+/// What `[ads]` looks like on disk: the same table plus the legacy single `org` key.
+#[derive(Deserialize)]
+struct RawAdsConfig {
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    orgs: Vec<String>,
+    #[serde(default)]
+    chrome_profile: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    apps: BTreeMap<String, AdsApp>,
+}
+
+impl From<RawAdsConfig> for AdsConfig {
+    /// Folds the legacy `org = "..."` into `orgs`; it is never written back.
+    fn from(raw: RawAdsConfig) -> Self {
+        let mut config = AdsConfig {
+            orgs: Vec::new(),
+            chrome_profile: raw.chrome_profile,
+            port: raw.port,
+            apps: raw.apps,
+        };
+        for org in raw.orgs.into_iter().chain(raw.org) {
+            config.add_org(&org);
+        }
+
+        config
+    }
+}
+
+impl AdsConfig {
+    /// Adds a Partners organization unless it is already connected.
+    pub fn add_org(&mut self, org: &str) {
+        if !org.is_empty() && !self.orgs.iter().any(|o| o == org) {
+            self.orgs.push(org.to_string());
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +85,17 @@ pub struct AdsApp {
     /// Shopify app name, for humans reading the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Partners organization the app's ads live in. Mappings written before multi-org
+    /// support have none; they belong to the single org that was connected then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+}
+
+impl AdsApp {
+    /// Whether this app can be synced from `org`: a legacy mapping without an org matches any.
+    pub fn in_org(&self, org: &str) -> bool {
+        self.org.as_deref().is_none_or(|o| o == org)
+    }
 }
 
 #[derive(Debug)]
@@ -195,12 +248,18 @@ mod tests {
 
     fn ads() -> AdsConfig {
         AdsConfig {
-            org: Some("1234567".into()),
+            orgs: vec!["1234567".into(), "7654321".into()],
             chrome_profile: None,
             port: Some(9444),
             apps: BTreeMap::from([
-                ("abc123".to_string(), AdsApp { ulid: "01JABCDEF".into(), name: Some("Block Country".into()) }),
-                ("def456".to_string(), AdsApp { ulid: "01JXYZ".into(), name: None }),
+                (
+                    "abc123".to_string(),
+                    AdsApp { ulid: "01JABCDEF".into(), name: Some("Block Country".into()), org: Some("1234567".into()) },
+                ),
+                (
+                    "def456".to_string(),
+                    AdsApp { ulid: "01JXYZ".into(), name: None, org: Some("7654321".into()) },
+                ),
             ]),
         }
     }
@@ -216,7 +275,9 @@ mod tests {
         };
         let text = toml::to_string(&original).unwrap();
         assert!(text.contains("api_key = \"rk_live_x\""));
+        assert!(text.contains("orgs = [\"1234567\", \"7654321\"]"));
         assert!(text.contains("[ads.apps.abc123]"));
+        assert!(text.contains("org = \"7654321\""));
         assert!(!text.contains("chrome_profile"));
 
         let parsed: ConfigFile = toml::from_str(&text).unwrap();
@@ -230,10 +291,38 @@ mod tests {
         )
         .unwrap();
         let ads = parsed.ads.unwrap();
-        assert_eq!(ads.org.as_deref(), Some("42"));
-        assert_eq!(ads.apps["key1"], AdsApp { ulid: "01A".into(), name: Some("One".into()) });
+        assert_eq!(ads.orgs, ["42"]);
+        assert_eq!(ads.apps["key1"], AdsApp { ulid: "01A".into(), name: Some("One".into()), org: None });
         assert_eq!(ads.apps["key2"].name, None);
         assert_eq!(parsed.api_key.as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn legacy_org_loads_as_orgs_and_is_not_written_back() {
+        let parsed: ConfigFile = toml::from_str("[ads]\norg = \"1\"\n[ads.apps.key1]\nulid = \"01A\"\n").unwrap();
+        let ads = parsed.ads.as_ref().unwrap();
+        assert_eq!(ads.orgs, ["1"]);
+        assert_eq!(ads.apps["key1"].org, None);
+        assert!(ads.apps["key1"].in_org("1"));
+
+        let text = toml::to_string(&parsed).unwrap();
+        assert!(text.contains("orgs = [\"1\"]"));
+        assert!(!text.contains("\norg ="));
+        assert!(!text.starts_with("org ="));
+    }
+
+    #[test]
+    fn legacy_org_merges_with_orgs_without_duplicates() {
+        let parsed: ConfigFile = toml::from_str("[ads]\norg = \"1\"\norgs = [\"2\", \"1\", \"2\"]\n").unwrap();
+        assert_eq!(parsed.ads.unwrap().orgs, ["2", "1"]);
+    }
+
+    #[test]
+    fn apps_match_their_own_org_and_legacy_apps_match_any() {
+        let scoped = AdsApp { ulid: "01A".into(), name: None, org: Some("1".into()) };
+        let legacy = AdsApp { ulid: "01B".into(), name: None, org: None };
+        assert!(scoped.in_org("1") && !scoped.in_org("2"));
+        assert!(legacy.in_org("1") && legacy.in_org("2"));
     }
 
     #[test]
