@@ -199,6 +199,11 @@ pub enum AdsCmd {
         /// Directory for the raw day exports and payload files, one subfolder per organization (default: `<cache dir>/ads-export`).
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
+        /// Show the Chrome window while syncing. By default a Chrome started by the sync runs
+        /// headless (a window opens only when the Partners login has expired) and quits when the
+        /// sync ends; a Chrome that was already running is left open.
+        #[arg(long)]
+        show_browser: bool,
     },
 }
 

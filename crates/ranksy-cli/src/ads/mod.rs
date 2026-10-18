@@ -75,6 +75,7 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
             dry_run,
             resume,
             out,
+            show_browser,
         } => {
             let ads = ctx.file.ads.clone().ok_or_else(|| anyhow!(NOT_CONNECTED))?;
             let orgs = sync::select_orgs(&ads, org.as_deref())?;
@@ -93,7 +94,12 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
                 out: out.clone().unwrap_or_else(default_cache_dir),
             };
 
-            sync::run(&ctx, &ads, chrome_options(chrome, Some(&ads)), &opts, &orgs).await
+            let chrome = ChromeOptions {
+                headless: !show_browser,
+                ..chrome_options(chrome, Some(&ads))
+            };
+
+            sync::run(&ctx, &ads, chrome, &opts, &orgs).await
         }
     }
 }
@@ -107,10 +113,12 @@ fn describe_orgs(orgs: &[String]) -> String {
     orgs.join(", ")
 }
 
-/// Flags win over the `[ads]` config, which wins over the defaults.
+/// Flags win over the `[ads]` config, which wins over the defaults. The browser is visible;
+/// `sync` switches to headless unless `--show-browser`.
 fn chrome_options(args: &ChromeArgs, ads: Option<&AdsConfig>) -> ChromeOptions {
     ChromeOptions {
         bin: args.chrome.clone(),
+        headless: false,
         port: args
             .port
             .or_else(|| ads.and_then(|a| a.port))

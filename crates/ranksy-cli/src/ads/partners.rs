@@ -15,6 +15,8 @@ pub const ORGANIZATIONS_URL: &str = "https://partners.shopify.com/organizations"
 
 pub const CONNECT_LOGIN_TIMEOUT_SECS: u64 = 600;
 pub const SYNC_LOGIN_TIMEOUT_SECS: u64 = 60;
+/// How long a headless sync waits for a usable session before opening a window instead.
+const HEADLESS_LOGIN_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Org {
@@ -64,12 +66,80 @@ pub fn classify(href: &str, csrf: bool) -> PageState {
     PageState::Other
 }
 
+/// A connected Partners tab, and whether this run started the browser it lives in.
+pub struct Session {
+    pub tab: Tab,
+    pub launched: bool,
+    port: u16,
+}
+
+impl Session {
+    /// Drops the tab connection and quits the browser when this run started it; a Chrome
+    /// that was already running stays open.
+    pub async fn finish(self) {
+        self.tab.close().await;
+        if !self.launched {
+            return;
+        }
+        if let Err(e) = chrome::close_browser(self.port).await {
+            eprintln!("could not close Chrome: {e:#}");
+        }
+    }
+}
+
 /// Launches/attaches Chrome and returns a connected tab pointed at (or on its way to) `start_url`.
-pub async fn open_tab(opts: &ChromeOptions, start_url: &str) -> Result<Tab> {
+pub async fn open_tab(opts: &ChromeOptions, start_url: &str) -> Result<Session> {
     let launched = chrome::ensure_running(opts, start_url).await?;
     let target = chrome::find_or_open_tab(opts.port, start_url, launched).await?;
+    let tab = match Tab::connect(&target.ws_url).await {
+        Ok(tab) => tab,
+        Err(e) => {
+            if launched {
+                let _ = chrome::close_browser(opts.port).await;
+            }
+            return Err(e);
+        }
+    };
 
-    Tab::connect(&target.ws_url).await
+    Ok(Session {
+        tab,
+        launched,
+        port: opts.port,
+    })
+}
+
+/// Opens the Partners tab for a sync. A Chrome started headless whose Partners session has
+/// expired is quit and started again with a window, so the login can be done by hand.
+pub async fn open_sync_tab(opts: &ChromeOptions, org: &str) -> Result<Session> {
+    let session = open_tab(opts, &ads_url(org)).await?;
+    if !session.launched || !opts.headless {
+        return Ok(session);
+    }
+    let probe = wait_for_login(
+        &session.tab,
+        LoginWait {
+            timeout_secs: HEADLESS_LOGIN_TIMEOUT_SECS,
+            wanted_org: Some(org),
+            interactive: false,
+        },
+    )
+    .await;
+    if probe.is_ok() {
+        return Ok(session);
+    }
+
+    session.finish().await;
+    println!(
+        "The Partners session needs a login. Log in to Shopify Partners in the Chrome window… (waiting up to {SYNC_LOGIN_TIMEOUT_SECS} seconds)"
+    );
+    open_tab(
+        &ChromeOptions {
+            headless: false,
+            ..opts.clone()
+        },
+        &ads_url(org),
+    )
+    .await
 }
 
 pub struct LoginWait<'a> {
