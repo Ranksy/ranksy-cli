@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/Ranksy/ranksy-cli/compare/v0.9.1...v0.10.0) (2026-10-18)
+
+
+### Features
+
+* quit the Chrome that ranksy ads sync started, and sync headless ([#21](https://github.com/Ranksy/ranksy-cli/issues/21)) ([3aba823](https://github.com/Ranksy/ranksy-cli/commit/3aba823212dda26954564f87136fc763d1210990))
+
 ## [0.9.1](https://github.com/Ranksy/ranksy-cli/compare/v0.9.0...v0.9.1) (2026-10-17)
 
 
