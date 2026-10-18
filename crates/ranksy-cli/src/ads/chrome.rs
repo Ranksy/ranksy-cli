@@ -1,8 +1,9 @@
-//! Launching (or attaching to) a visible Chrome with a persistent profile and a
-//! remote-debugging port, and finding the Partners tab to drive over CDP.
+//! Launching (or attaching to) Chrome with a persistent profile and a remote-debugging
+//! port, finding the Partners tab to drive over CDP, and quitting a Chrome we started.
 
+use super::cdp::Tab;
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -19,6 +20,8 @@ const MACOS_CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Googl
 pub struct ChromeOptions {
     /// Explicit browser binary (`--chrome` / `CHROME_BIN`); searched for on PATH when not a path.
     pub bin: Option<PathBuf>,
+    /// Start Chrome without a window (only applies when this run launches it).
+    pub headless: bool,
     pub port: u16,
     pub profile: PathBuf,
 }
@@ -73,13 +76,15 @@ pub async fn ensure_running(opts: &ChromeOptions, start_url: &str) -> Result<boo
         opts.port,
         start_url,
         cfg!(target_os = "linux"),
+        opts.headless,
     ))
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
     #[cfg(unix)]
-    {
+    if !opts.headless {
         // Own process group: Ctrl+C in the terminal must not close the browser (and its login).
+        // A headless one shares ours, so Ctrl+C doesn't leave it running in the background.
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
@@ -100,12 +105,22 @@ pub async fn ensure_running(opts: &ChromeOptions, start_url: &str) -> Result<boo
 }
 
 /// Chrome's command-line for the dedicated Partners profile.
-pub fn launch_args(profile: &Path, port: u16, start_url: &str, linux: bool) -> Vec<String> {
+pub fn launch_args(
+    profile: &Path,
+    port: u16,
+    start_url: &str,
+    linux: bool,
+    headless: bool,
+) -> Vec<String> {
     let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         format!("--remote-debugging-port={port}"),
     ];
-    if linux {
+    if headless {
+        // Same profile and login as the visible window; a desktop-sized viewport for Partners.
+        args.push("--headless=new".to_string());
+        args.push("--window-size=1440,900".to_string());
+    } else if linux {
         args.push("--ozone-platform-hint=auto".to_string());
     }
     args.push("--no-first-run".to_string());
@@ -113,6 +128,40 @@ pub fn launch_args(profile: &Path, port: u16, start_url: &str, linux: bool) -> V
     args.push(start_url.to_string());
 
     args
+}
+
+/// Quits the whole browser on `port` (`Browser.close`) and waits until it is gone, so the
+/// profile can be opened again. Only for a Chrome this run started.
+pub async fn close_browser(port: u16) -> Result<()> {
+    let version: Value = http()?
+        .get(format!("http://127.0.0.1:{port}/json/version"))
+        .send()
+        .await?
+        .json()
+        .await
+        .context("unexpected response from Chrome's /json/version")?;
+    let ws_url = version
+        .get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Chrome did not return a browser debugger URL"))?;
+    let browser = Tab::connect(ws_url).await?;
+    // Chrome may exit before it answers; the port going away is what counts.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        browser.send("Browser.close", json!({})),
+    )
+    .await;
+    browser.close().await;
+
+    for _ in 0..40 {
+        if !is_up(port).await {
+            // The debug port closes a moment before the profile lock is released.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    bail!("Chrome on port {port} is still running after Browser.close")
 }
 
 /// Picks the Chrome binary: the explicit one, else the first candidate on PATH, else known app paths.
@@ -237,6 +286,7 @@ mod tests {
             9333,
             "https://partners.shopify.com/organizations",
             true,
+            false,
         );
         assert_eq!(
             args,
@@ -249,8 +299,28 @@ mod tests {
                 "https://partners.shopify.com/organizations"
             ]
         );
-        assert!(!launch_args(Path::new("/p"), 1, "u", false)
+        assert!(!launch_args(Path::new("/p"), 1, "u", false, false)
             .contains(&"--ozone-platform-hint=auto".to_string()));
+    }
+
+    #[test]
+    fn headless_launch_keeps_the_profile_and_port() {
+        let args = launch_args(Path::new("/p"), 9333, "u", true, true);
+        assert_eq!(
+            args,
+            [
+                "--user-data-dir=/p",
+                "--remote-debugging-port=9333",
+                "--headless=new",
+                "--window-size=1440,900",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "u"
+            ]
+        );
+        assert!(!launch_args(Path::new("/p"), 1, "u", false, false)
+            .iter()
+            .any(|a| a.starts_with("--headless")));
     }
 
     #[test]

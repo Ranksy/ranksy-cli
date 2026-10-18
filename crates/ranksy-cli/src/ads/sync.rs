@@ -340,18 +340,19 @@ pub async fn run(
     )?;
     let days: Vec<String> = days.iter().map(NaiveDate::to_string).collect();
 
-    let tab = partners::open_tab(&chrome, &partners::ads_url(first)).await?;
+    let session = partners::open_sync_tab(&chrome, first).await?;
     let mut overall = Totals::default();
     let mut failed: Vec<&str> = Vec::new();
     for org in orgs {
-        let outcome = sync_org(&tab, client.as_ref(), ads, org, &days, opts).await;
+        let outcome = sync_org(&session.tab, client.as_ref(), ads, org, &days, opts).await;
         overall.merge(&outcome.totals);
         if let Some(e) = outcome.error {
             eprintln!("org {org} failed: {e:#}");
             failed.push(org);
         }
     }
-    tab.close().await;
+    // Quits the Chrome this sync started, whether the sync worked or not.
+    session.finish().await;
 
     if orgs.len() > 1 && !opts.dry_run && !super::is_quiet() {
         println!(

@@ -1,6 +1,6 @@
 //! `ranksy ads connect`: one-time, interactive setup.
 
-use super::chrome::ChromeOptions;
+use super::chrome::{self, ChromeOptions};
 use super::partners::{self, PartnersApp};
 use super::sync::{self, SyncOptions};
 use super::{chrome_options, default_profile, describe_orgs, ranksy_error, Ctx, DEFAULT_PORT};
@@ -39,9 +39,68 @@ pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) ->
         || partners::ORGANIZATIONS_URL.to_string(),
         partners::ads_url,
     );
-    let tab = partners::open_tab(&opts, &start_url).await?;
+    let session = partners::open_tab(&opts, &start_url).await?;
+    let launched = session.launched;
+    let result = login_and_map(
+        &session.tab,
+        org_flag,
+        existing.as_ref(),
+        &opts,
+        &ranksy_apps,
+    )
+    .await;
+    // Leave the window open for the first sync; it quits Chrome at the end of `run` instead.
+    let (ads, org) = match result {
+        Ok(Some(done)) => done,
+        Ok(None) => {
+            session.finish().await;
+            return Ok(());
+        }
+        Err(e) => {
+            session.finish().await;
+            return Err(e);
+        }
+    };
+    session.tab.close().await;
+
+    let run_now = Confirm::new()
+        .with_prompt(format!(
+            "Run the first sync for organization {org} now (last 3 complete days)?"
+        ))
+        .default(false)
+        .interact()
+        .unwrap_or(false);
+    let synced = if run_now {
+        sync::run(
+            ctx,
+            &ads,
+            opts.clone(),
+            &SyncOptions::first_run(),
+            std::slice::from_ref(&org),
+        )
+        .await
+    } else {
+        Ok(())
+    };
+    if launched {
+        if let Err(e) = chrome::close_browser(opts.port).await {
+            eprintln!("could not close Chrome: {e:#}");
+        }
+    }
+
+    synced
+}
+
+/// Login, app mapping and saving the config. `None` when nothing in `org` is mapped.
+async fn login_and_map(
+    tab: &super::cdp::Tab,
+    org_flag: Option<&str>,
+    existing: Option<&AdsConfig>,
+    opts: &ChromeOptions,
+    ranksy_apps: &[RanksyApp],
+) -> Result<Option<(AdsConfig, String)>> {
     let org = partners::wait_for_login(
-        &tab,
+        tab,
         partners::LoginWait {
             timeout_secs: partners::CONNECT_LOGIN_TIMEOUT_SECS,
             wanted_org: org_flag,
@@ -51,25 +110,20 @@ pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) ->
     .await?;
     println!("Logged in to Partners organization {org}.");
 
-    let partners_apps = partners::list_apps(&tab, &org).await;
-    tab.close().await;
-    let partners_apps = partners_apps?;
+    let partners_apps = partners::list_apps(tab, &org).await?;
     if partners_apps.is_empty() {
         bail!("No ad campaigns found in Partners organization {org}. Pass --org <id> if your ads live in another organization.");
     }
 
-    let current = existing.as_ref().map(|a| &a.apps);
+    let current = existing.map(|a| &a.apps);
     let mut choices: Vec<(PartnersApp, Option<RanksyApp>)> = Vec::new();
     for app in partners_apps {
-        let picked = choose_ranksy_app(
-            &app,
-            &ranksy_apps,
-            current.and_then(|m| m.get(&app.api_key)),
-        )?;
+        let picked =
+            choose_ranksy_app(&app, ranksy_apps, current.and_then(|m| m.get(&app.api_key)))?;
         choices.push((app, picked));
     }
 
-    let ads = build_ads_config(existing.as_ref(), &org, &opts, &choices);
+    let ads = build_ads_config(existing, &org, opts, &choices);
     config::save_ads(ads.clone()).map_err(|e| anyhow!(e.to_string()))?;
     println!("\nSaved to {}", config::config_path().display());
     print_mapping(&choices);
@@ -80,29 +134,11 @@ pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) ->
     );
     if !ads.apps.values().any(|a| a.in_org(&org)) {
         println!("\nNo apps are mapped in organization {org}, so there is nothing to sync for it. Re-run `ranksy ads connect --org {org}` to map them.");
-        return Ok(());
+        return Ok(None);
     }
     println!("\nNext: `ranksy ads sync` (cron: `0 6 * * * ranksy ads sync`).");
 
-    let run_now = Confirm::new()
-        .with_prompt(format!(
-            "Run the first sync for organization {org} now (last 3 complete days)?"
-        ))
-        .default(false)
-        .interact()
-        .unwrap_or(false);
-    if run_now {
-        sync::run(
-            ctx,
-            &ads,
-            opts,
-            &SyncOptions::first_run(),
-            std::slice::from_ref(&org),
-        )
-        .await?;
-    }
-
-    Ok(())
+    Ok(Some((ads, org)))
 }
 
 fn choose_ranksy_app(
@@ -293,6 +329,7 @@ mod tests {
     fn default_opts() -> ChromeOptions {
         ChromeOptions {
             bin: None,
+            headless: false,
             port: DEFAULT_PORT,
             profile: default_profile(),
         }
@@ -382,6 +419,7 @@ mod tests {
 
         let custom = ChromeOptions {
             bin: None,
+            headless: false,
             port: 9444,
             profile: "/custom/profile".into(),
         };
