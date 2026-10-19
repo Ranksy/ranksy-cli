@@ -45,6 +45,18 @@ The daily campaign list is still pulled for the whole organization, but other
 apps' breakdowns, search terms and keywords are skipped, and nothing is pushed
 for them.
 
+Read the synced ads back with `ads overview`, `ads trend`, `ads keywords` and
+`ads search-terms` (key scope `ads:read`; revenue and ROAS also need
+`metrics:read`). All four take `--start-date`, `--end-date`, `--campaign`
+(Shopify campaign id or name) and `--ad-type`; the period defaults to the 30
+days up to yesterday:
+
+```bash
+ranksy --app 01HZX9ABCDEF ads overview --compare
+ranksy --app 01HZX9ABCDEF ads keywords --campaign "Search - core" --sort-by cpi
+ranksy --app 01HZX9ABCDEF ads search-terms --flag converting --json
+```
+
 ## Development
 
 ```bash

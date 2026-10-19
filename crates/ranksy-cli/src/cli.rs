@@ -114,7 +114,7 @@ pub enum Commands {
     Ltv { #[command(subcommand)] cmd: LtvCmd },
     /// Store traffic analytics (BigQuery-backed).
     Traffic { #[command(subcommand)] cmd: TrafficCmd },
-    /// Shopify App Store ads: pull from Shopify Partners into Ranksy.
+    /// Shopify App Store ads: read their performance, and pull them from Shopify Partners into Ranksy.
     Ads { #[command(subcommand)] cmd: AdsCmd },
     /// Update ranksy to the latest release (or `--check` to only look).
     Update {
@@ -141,8 +141,63 @@ pub struct ChromeArgs {
     pub profile: Option<PathBuf>,
 }
 
+/// Filters shared by the Shopify Ads read commands. Unset dates are left to the API.
+#[derive(Args, Clone, Debug)]
+pub struct AdsReportArgs {
+    /// First day, YYYY-MM-DD [default: 29 days before --end-date].
+    #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date)]
+    pub start_date: Option<NaiveDate>,
+    /// Last day, YYYY-MM-DD [default: yesterday].
+    #[arg(long, value_name = "YYYY-MM-DD", value_parser = crate::ads::parse_date)]
+    pub end_date: Option<NaiveDate>,
+    /// Only this campaign: its Shopify campaign id or exact name (case-insensitive). Overrides --ad-type and includes archived campaigns.
+    #[arg(long)]
+    pub campaign: Option<String>,
+    /// Only this ad type: `search`, `category` or `homepage`.
+    #[arg(long, value_parser = ["search", "category", "homepage"])]
+    pub ad_type: Option<String>,
+}
+
 #[derive(Subcommand)]
 pub enum AdsCmd {
+    /// KPIs, funnel and one row per campaign for the period (needs `ads:read`).
+    Overview {
+        #[command(flatten)]
+        filters: AdsReportArgs,
+        /// Add the previous period of the same length.
+        #[arg(long)]
+        compare: bool,
+    },
+    /// Ads performance per day or week (needs `ads:read`).
+    Trend {
+        #[command(flatten)]
+        filters: AdsReportArgs,
+        /// `day` or `week` [default: day, or week for periods over 120 days].
+        #[arg(long, value_parser = ["day", "week"])]
+        grouping: Option<String>,
+    },
+    /// Performance of the keywords you bid on; per campaign with --campaign (needs `ads:read`).
+    Keywords {
+        #[command(flatten)]
+        filters: AdsReportArgs,
+        /// `spend`, `installs` or `impressions` (highest first), or `cpi` (lowest first) [default: spend].
+        #[arg(long, value_parser = ["spend", "installs", "impressions", "cpi"])]
+        sort_by: Option<String>,
+        /// Keywords to return, 1 to 200 [default: 50].
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..=200))]
+        limit: Option<i64>,
+    },
+    /// Searches that triggered your ads, by spend (needs `ads:read`).
+    SearchTerms {
+        #[command(flatten)]
+        filters: AdsReportArgs,
+        /// Only terms that are `not_a_keyword`, spent without installs (`no_installs`), or earned installs (`converting`).
+        #[arg(long, value_parser = ["not_a_keyword", "no_installs", "converting"])]
+        flag: Option<String>,
+        /// Terms to return, 1 to 100 [default: 50].
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..=100))]
+        limit: Option<i64>,
+    },
     /// Log in to Shopify Partners and map the Shopify apps of one organization to Ranksy apps
     /// (interactive). Run it once per Partners organization; each run adds to the connected ones.
     Connect {

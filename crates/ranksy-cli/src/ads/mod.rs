@@ -12,6 +12,7 @@ mod connect;
 mod disconnect;
 mod partners;
 mod payload;
+pub mod report;
 mod sync;
 
 use crate::cli::{AdsCmd, ChromeArgs};
@@ -61,6 +62,9 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
     match cmd {
         AdsCmd::Connect { chrome, org } => connect::run(&ctx, chrome, org.as_deref()).await,
         AdsCmd::Disconnect { org } => disconnect::run(&ctx, org),
+        AdsCmd::Overview { .. } | AdsCmd::Trend { .. } | AdsCmd::Keywords { .. } | AdsCmd::SearchTerms { .. } => {
+            unreachable!("read commands run through run::dispatch")
+        }
         AdsCmd::Sync {
             chrome,
             org,

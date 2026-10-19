@@ -25,10 +25,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     let file = config::load();
 
-    // ads resolves the key itself: `ads sync --dry-run` works without one.
+    // ads connect/disconnect/sync resolve the key themselves: `ads sync --dry-run` works
+    // without one. The ads read commands take the usual path below.
     if let Commands::Ads { cmd } = &cli.command {
-        let ctx = crate::ads::Ctx { api_key: cli.api_key.clone(), base_url: cli.base_url.clone(), quiet: cli.quiet, file };
-        return crate::ads::run(cmd, ctx).await;
+        if crate::ads::report::request(cmd).is_none() {
+            let ctx = crate::ads::Ctx { api_key: cli.api_key.clone(), base_url: cli.base_url.clone(), quiet: cli.quiet, file };
+            return crate::ads::run(cmd, ctx).await;
+        }
     }
 
     let resolved = config::resolve(
@@ -51,7 +54,11 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     loop {
         let (value, columns) = dispatch(&client, &cli.command, app.as_deref()).await?;
-        println!("{}", output::render(&value, format, &columns));
+        let text = match (&cli.command, format) {
+            (Commands::Ads { cmd }, output::Format::Table) => crate::ads::report::table(cmd, &value),
+            _ => output::render(&value, format, &columns),
+        };
+        println!("{text}");
         match cli.watch {
             Some(secs) if secs > 0 => tokio::time::sleep(std::time::Duration::from_secs(secs)).await,
             _ => break,
@@ -68,9 +75,10 @@ async fn dispatch(
     use crate::cli::*;
     let need_app = || app.ok_or_else(|| anyhow!("no app selected. Pass --app <id> or set it in config."));
     let (value, columns) = match command {
-        Commands::Login { .. } | Commands::Update { .. } | Commands::Ads { .. } | Commands::Docs { .. } => {
+        Commands::Login { .. } | Commands::Update { .. } | Commands::Docs { .. } => {
             unreachable!("handled earlier")
         }
+        Commands::Ads { cmd } => (crate::ads::report::fetch(client, need_app()?, cmd).await?, vec![]),
         Commands::Whoami => (
             client.whoami().await?,
             vec![col("Ulid", "ulid"), col("Slug", "slug"), col("Name", "name")],
