@@ -25,22 +25,33 @@ jobs:
       # When the release PR merges, push the git tag so cargo-dist's release.yml
       # (on: push: tags) builds and publishes the GitHub Release.
       #
+      # release-please never reports release_created here: with
+      # skip-github-release it creates neither the release nor the tag. So
+      # tag from the manifest instead: a manifest version without a tag means
+      # the release PR just merged.
+      #
       # The tag MUST be pushed with a PAT / GitHub App token, not GITHUB_TOKEN:
       # GitHub blocks events authored by GITHUB_TOKEN from triggering other
       # workflows, so a GITHUB_TOKEN tag push would silently never start a build.
+      - uses: actions/checkout@v4
       - name: Create release tag
-        if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG: ${{ steps.release.outputs.tag_name }}
-          SHA: ${{ steps.release.outputs.sha }}
+          SHA: ${{ github.sha }}
         run: |
-          # If the tag already exists (e.g. release-please created it under
-          # GITHUB_TOKEN, which cannot trigger workflows), delete it first, then
-          # recreate it under the PAT so the push event actually starts release.yml.
-          # No release exists for this tag yet, so deleting the ref is safe.
-          gh api --method DELETE "/repos/$REPO/git/refs/tags/$TAG" 2>/dev/null || true
+          TAG="v$(jq -r '."crates/ranksy-cli"' .release-please-manifest.json)"
+          if gh api "/repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists, nothing to release"
+            exit 0
+          fi
           gh api --method POST "/repos/$REPO/git/refs" \
             -f ref="refs/tags/$TAG" \
             -f sha="$SHA"
+          # release-please won't open the next release PR while a merged one
+          # is still labelled "autorelease: pending".
+          for pr in $(gh pr list --repo "$REPO" --state merged --label "autorelease: pending" --json number --jq '.[].number'); do
+            gh pr edit "$pr" --repo "$REPO" \
+              --remove-label "autorelease: pending" \
+              --add-label "autorelease: tagged" || true
+          done
