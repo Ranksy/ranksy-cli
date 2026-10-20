@@ -43,13 +43,16 @@ backfill just one app, add `--only-app` (Ranksy app id, Shopify app id, or app
 name; repeat it for several): `ranksy ads sync --only-app "My App" --from 2025-11-01 --to 2025-12-20`.
 The daily campaign list is still pulled for the whole organization, but other
 apps' breakdowns, search terms and keywords are skipped, and nothing is pushed
-for them.
+for them. Each search keyword is sent with Shopify's ad relevance and
+suggested bid range, and each display campaign with its
+suggested bid range.
 
 Read the synced ads back with `ads overview`, `ads trend`, `ads keywords` and
 `ads search-terms` (key scope `ads:read`; revenue and ROAS also need
 `metrics:read`). All four take `--start-date`, `--end-date`, `--campaign`
 (Shopify campaign id or name) and `--ad-type`; the period defaults to the 30
-days up to yesterday:
+days up to yesterday. With `--campaign`, `ads keywords` also shows each
+keyword's suggested bid range and ad relevance:
 
 ```bash
 ranksy --app 01HZX9ABCDEF ads overview --compare
