@@ -186,3 +186,74 @@ async fn reads_api_key_and_base_url_from_cwd_dotenv() {
     std::fs::remove_dir_all(&dir).ok();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
 }
+
+#[tokio::test]
+async fn ads_keywords_sends_the_filters_and_renders_a_table() {
+    use wiremock::matchers::query_param;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/apps/app_123/shopify-ads/keywords"))
+        .and(query_param("start_date", "2026-09-01"))
+        .and(query_param("campaign", "9876543"))
+        .and(query_param("sort_by", "cpi"))
+        .and(query_param("limit", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "shopify_ads_keywords",
+            "period": {"start_date": "2026-09-01", "end_date": "2026-09-30"},
+            "campaign": {"id": 412, "shopify_campaign_id": "9876543", "name": "Search - core keywords"},
+            "ad_type": null, "level": "campaign", "sort_by": "cpi", "total_count": 1,
+            "keywords": [{"keyword": "email marketing", "match_type": "exact", "spend": 588.2, "cpi": null, "flags": []}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = ranksy(
+        &server.uri(),
+        &["--app", "app_123", "ads", "keywords", "--start-date", "2026-09-01", "--campaign", "9876543", "--sort-by", "cpi", "--limit", "2"],
+    );
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("email marketing") && s.contains("Search - core keywords") && s.contains('–'), "got: {s}");
+}
+
+#[tokio::test]
+async fn ads_overview_json_passes_the_response_through() {
+    use wiremock::matchers::query_param;
+    let server = MockServer::start().await;
+    let body = serde_json::json!({"object": "shopify_ads_overview", "kpis": {"current": {"spend": 0}}, "campaigns": []});
+    Mock::given(method("GET"))
+        .and(path("/apps/app_123/shopify-ads/overview"))
+        .and(query_param("compare", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = ranksy(&server.uri(), &["--app", "app_123", "--json", "ads", "overview", "--compare"]);
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed, body);
+}
+
+#[tokio::test]
+async fn ads_read_reports_an_unknown_campaign() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/apps/app_123/shopify-ads/trend"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "error": {"type": "invalid_request_error", "code": "resource_not_found", "param": "campaign", "message": "No Shopify ads campaign 'nope' for this app."}
+        })))
+        .mount(&server)
+        .await;
+
+    let out = ranksy(&server.uri(), &["--app", "app_123", "ads", "trend", "--campaign", "nope"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Campaign not found: No Shopify ads campaign 'nope'"));
+}
+
+#[test]
+fn ads_read_rejects_an_unknown_ad_type_before_calling() {
+    let out = ranksy("http://127.0.0.1:9", &["--app", "app_123", "ads", "search-terms", "--ad-type", "banner"]);
+    assert_eq!(out.status.code(), Some(2));
+}

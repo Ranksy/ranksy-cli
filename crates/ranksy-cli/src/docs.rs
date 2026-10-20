@@ -41,6 +41,7 @@ const fn with_note(r: Ref, note: &'static str) -> Ref {
 
 const LIST_APPS: Option<(&str, &str)> = Some(("List apps", "/apps#list-apps"));
 const ADS_GUIDE: Option<(&str, &str)> = Some(("Sync App Store Ads", "/cli/ads"));
+const ADS_REVENUE: &str = "Revenue and ROAS also need `metrics:read`; without it the table leaves those columns out.";
 
 const REFERENCE: &[Ref] = &[
     local("login", "Writes the key to the config file. Makes no API call."),
@@ -76,6 +77,19 @@ const REFERENCE: &[Ref] = &[
     api("traffic attribution", "GET", "/api/v1/apps/:app/traffic/attribution", "traffic:read", None),
     api("traffic funnel", "GET", "/api/v1/apps/:app/traffic/funnel", "traffic:read", None),
     api("traffic source-trends", "GET", "/api/v1/apps/:app/traffic/source-trends", "traffic:read", None),
+    with_note(
+        api("ads overview", "GET", "/api/v1/apps/:app/shopify-ads/overview", "ads:read", Some(("Shopify Ads overview", "/shopify-ads#overview"))),
+        ADS_REVENUE,
+    ),
+    with_note(
+        api("ads trend", "GET", "/api/v1/apps/:app/shopify-ads/trend", "ads:read", Some(("Shopify Ads trend", "/shopify-ads#trend"))),
+        ADS_REVENUE,
+    ),
+    with_note(
+        api("ads keywords", "GET", "/api/v1/apps/:app/shopify-ads/keywords", "ads:read", Some(("Shopify Ads keywords", "/shopify-ads#keywords"))),
+        ADS_REVENUE,
+    ),
+    api("ads search-terms", "GET", "/api/v1/apps/:app/shopify-ads/search-terms", "ads:read", Some(("Shopify Ads search terms", "/shopify-ads#search-terms"))),
     with_note(
         api("ads connect", "GET", "/api/v1/apps", "apps:read", ADS_GUIDE),
         "It lists your Ranksy apps so you can map each Shopify app to one. Give the same key `ads:write` too, for `ads sync`.",
