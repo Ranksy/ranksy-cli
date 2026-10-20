@@ -172,7 +172,10 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("Match", "match_type"),
     ("Status", "status"),
     ("Bid", "bid"),
+    ("Suggested low", "suggested_bid_lower"),
+    ("Suggested high", "suggested_bid_upper"),
     ("Bid vs suggested", "bid_position"),
+    ("Relevance", "relevance_category"),
     ("Spend", "spend"),
     ("Share %", "share_of_spend"),
     ("Impressions", "impressions"),
@@ -458,6 +461,21 @@ mod tests {
         assert!(out.contains("spend_no_installs, bid_below_suggested_range"), "{out}");
         assert!(out.contains("Showing 1 of 37."), "{out}");
         assert!(!out.contains("Revenue") && !out.contains("Customers"), "{out}");
+        assert!(!out.contains("Relevance") && !out.contains("Suggested low"), "{out}");
+    }
+
+    #[test]
+    fn campaign_keywords_show_relevance_and_the_suggested_bid_range() {
+        let body = json!({
+            "period": {"start_date": "2026-10-01", "end_date": "2026-10-18"},
+            "level": "campaign",
+            "keywords": [{"keyword": "block ip", "match_type": "exact", "bid": 7.0, "suggested_bid_lower": 6.5, "suggested_bid_upper": 8.25,
+                "bid_position": "within", "relevance_category": "high", "flags": []}]
+        });
+        let out = table(&AdsCmd::Keywords { filters: filters(), sort_by: None, limit: None }, &body);
+        assert!(out.contains("Relevance") && out.contains("high"), "{out}");
+        assert!(out.contains("Suggested low") && out.contains("6.5"), "{out}");
+        assert!(out.contains("Suggested high") && out.contains("8.25"), "{out}");
     }
 
     #[test]

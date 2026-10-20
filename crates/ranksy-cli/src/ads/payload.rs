@@ -458,6 +458,7 @@ mod tests {
             json!({ "countries": ["US"], "plans": ["basic"], "devices": ["desktop"] })
         );
         assert_eq!(s["keywords"][0]["shopify_keyword_id"], "1561502");
+        assert_eq!(s["keywords"][0]["relevance_category"], "high");
         assert_eq!(
             s["keywords"][0]["suggested_bid_range"],
             json!({ "lower": 6, "upper": 6 })
