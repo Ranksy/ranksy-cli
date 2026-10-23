@@ -7,7 +7,10 @@ async fn whoami_renders_json_with_env_key() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/apps"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"email": "goran@ranksyapp.com"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"email": "goran@ranksyapp.com"})),
+        )
         .mount(&server)
         .await;
 
@@ -18,7 +21,11 @@ async fn whoami_renders_json_with_env_key() {
         .output()
         .expect("run ranksy");
 
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("goran@ranksyapp.com"), "got: {stdout}");
 }

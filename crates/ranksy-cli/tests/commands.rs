@@ -24,7 +24,11 @@ async fn rankings_get_passes_app_and_renders_table() {
         .await;
 
     let out = ranksy(&server.uri(), &["--app", "app_123", "rankings", "get"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains('4') && s.contains("2026-05-29"), "got: {s}");
 }
@@ -41,7 +45,11 @@ async fn keywords_list_passes_app_and_renders_table() {
         .await;
 
     let out = ranksy(&server.uri(), &["--app", "app_123", "keywords", "list"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("shopify seo"), "got: {s}");
 }
@@ -58,7 +66,11 @@ async fn reviews_list_hits_v1_reviews() {
         .await;
 
     let out = ranksy(&server.uri(), &["--app", "app_123", "reviews", "list"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("Acme Store"), "got: {s}");
 }
@@ -75,7 +87,11 @@ async fn installs_get_hits_v1_installs() {
         .await;
 
     let out = ranksy(&server.uri(), &["--app", "app_123", "installs", "get"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("search"), "got: {s}");
 }
@@ -92,7 +108,11 @@ async fn apps_list_hits_v1_apps() {
         .await;
 
     let out = ranksy(&server.uri(), &["apps", "list"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("My App"), "got: {s}");
 }
@@ -102,7 +122,9 @@ async fn api_error_exits_one() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/apps/app_123/reviews"))
-        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({"message": "forbidden"})))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_json(serde_json::json!({"message": "forbidden"})),
+        )
         .mount(&server)
         .await;
 
@@ -121,8 +143,15 @@ async fn keywords_track_posts_and_renders() {
         .mount(&server)
         .await;
 
-    let out = ranksy(&server.uri(), &["--app", "app_123", "keywords", "track", "shopify seo"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = ranksy(
+        &server.uri(),
+        &["--app", "app_123", "keywords", "track", "shopify seo"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stdout).contains("shopify-seo"));
 }
 
@@ -135,8 +164,15 @@ async fn keywords_untrack_deletes_by_slug() {
         .mount(&server)
         .await;
 
-    let out = ranksy(&server.uri(), &["--app", "app_123", "keywords", "untrack", "Shopify SEO"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = ranksy(
+        &server.uri(),
+        &["--app", "app_123", "keywords", "untrack", "Shopify SEO"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stdout).contains("untracked_keyword"));
 }
 
@@ -152,7 +188,11 @@ async fn listing_get_reads_listing() {
         .await;
 
     let out = ranksy(&server.uri(), &["--app", "app_123", "listing", "get"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stdout).contains("My App"));
 }
 
@@ -161,8 +201,13 @@ async fn reads_api_key_and_base_url_from_cwd_dotenv() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/apps"))
-        .and(wiremock::matchers::header("authorization", "Bearer env-file-key"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 9}]})))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer env-file-key",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 9}]})),
+        )
         .mount(&server)
         .await;
 
@@ -171,7 +216,10 @@ async fn reads_api_key_and_base_url_from_cwd_dotenv() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(".env"),
-        format!("RANKSY_API_KEY=env-file-key\nRANKSY_BASE_URL={}\n", server.uri()),
+        format!(
+            "RANKSY_API_KEY=env-file-key\nRANKSY_BASE_URL={}\n",
+            server.uri()
+        ),
     )
     .unwrap();
 
@@ -184,7 +232,11 @@ async fn reads_api_key_and_base_url_from_cwd_dotenv() {
         .expect("run ranksy");
 
     std::fs::remove_dir_all(&dir).ok();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[tokio::test]
@@ -210,11 +262,31 @@ async fn ads_keywords_sends_the_filters_and_renders_a_table() {
 
     let out = ranksy(
         &server.uri(),
-        &["--app", "app_123", "ads", "keywords", "--start-date", "2026-09-01", "--campaign", "9876543", "--sort-by", "cpi", "--limit", "2"],
+        &[
+            "--app",
+            "app_123",
+            "ads",
+            "keywords",
+            "--start-date",
+            "2026-09-01",
+            "--campaign",
+            "9876543",
+            "--sort-by",
+            "cpi",
+            "--limit",
+            "2",
+        ],
     );
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("email marketing") && s.contains("Search - core keywords") && s.contains('–'), "got: {s}");
+    assert!(
+        s.contains("email marketing") && s.contains("Search - core keywords") && s.contains('–'),
+        "got: {s}"
+    );
 }
 
 #[tokio::test]
@@ -230,8 +302,15 @@ async fn ads_overview_json_passes_the_response_through() {
         .mount(&server)
         .await;
 
-    let out = ranksy(&server.uri(), &["--app", "app_123", "--json", "ads", "overview", "--compare"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = ranksy(
+        &server.uri(),
+        &["--app", "app_123", "--json", "ads", "overview", "--compare"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let printed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(printed, body);
 }
@@ -247,13 +326,27 @@ async fn ads_read_reports_an_unknown_campaign() {
         .mount(&server)
         .await;
 
-    let out = ranksy(&server.uri(), &["--app", "app_123", "ads", "trend", "--campaign", "nope"]);
+    let out = ranksy(
+        &server.uri(),
+        &["--app", "app_123", "ads", "trend", "--campaign", "nope"],
+    );
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("Campaign not found: No Shopify ads campaign 'nope'"));
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("Campaign not found: No Shopify ads campaign 'nope'"));
 }
 
 #[test]
 fn ads_read_rejects_an_unknown_ad_type_before_calling() {
-    let out = ranksy("http://127.0.0.1:9", &["--app", "app_123", "ads", "search-terms", "--ad-type", "banner"]);
+    let out = ranksy(
+        "http://127.0.0.1:9",
+        &[
+            "--app",
+            "app_123",
+            "ads",
+            "search-terms",
+            "--ad-type",
+            "banner",
+        ],
+    );
     assert_eq!(out.status.code(), Some(2));
 }

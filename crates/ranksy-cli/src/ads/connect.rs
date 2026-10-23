@@ -65,7 +65,7 @@ pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) ->
 
     let run_now = Confirm::new()
         .with_prompt(format!(
-            "Run the first sync for organization {org} now (last 3 complete days)?"
+            "Run the first sync for organization {org} now (today and the 3 days before)?"
         ))
         .default(false)
         .interact()

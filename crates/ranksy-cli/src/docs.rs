@@ -28,20 +28,36 @@ const fn api(
     scope: &'static str,
     docs: Option<(&'static str, &'static str)>,
 ) -> Ref {
-    Ref { command, endpoint: Some((method, path)), scope: Some(scope), docs, note: None }
+    Ref {
+        command,
+        endpoint: Some((method, path)),
+        scope: Some(scope),
+        docs,
+        note: None,
+    }
 }
 
 const fn local(command: &'static str, note: &'static str) -> Ref {
-    Ref { command, endpoint: None, scope: None, docs: None, note: Some(note) }
+    Ref {
+        command,
+        endpoint: None,
+        scope: None,
+        docs: None,
+        note: Some(note),
+    }
 }
 
 const fn with_note(r: Ref, note: &'static str) -> Ref {
-    Ref { note: Some(note), ..r }
+    Ref {
+        note: Some(note),
+        ..r
+    }
 }
 
 const LIST_APPS: Option<(&str, &str)> = Some(("List apps", "/apps#list-apps"));
 const ADS_GUIDE: Option<(&str, &str)> = Some(("Sync App Store Ads", "/cli/ads"));
-const ADS_REVENUE: &str = "Revenue and ROAS also need `metrics:read`; without it the table leaves those columns out.";
+const ADS_REVENUE: &str =
+    "Revenue and ROAS also need `metrics:read`; without it the table leaves those columns out.";
 
 const REFERENCE: &[Ref] = &[
     local("login", "Writes the key to the config file. Makes no API call."),
@@ -122,9 +138,19 @@ pub fn markdown() -> String {
 /// Every visible command that has no visible subcommands, in definition order.
 fn leaves(root: &Command) -> Vec<(String, &Command)> {
     fn walk<'a>(cmd: &'a Command, prefix: &str, out: &mut Vec<(String, &'a Command)>) {
-        for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set() && s.get_name() != "help") {
-            let path = if prefix.is_empty() { sub.get_name().to_string() } else { format!("{prefix} {}", sub.get_name()) };
-            if sub.get_subcommands().any(|s| !s.is_hide_set() && s.get_name() != "help") {
+        for sub in cmd
+            .get_subcommands()
+            .filter(|s| !s.is_hide_set() && s.get_name() != "help")
+        {
+            let path = if prefix.is_empty() {
+                sub.get_name().to_string()
+            } else {
+                format!("{prefix} {}", sub.get_name())
+            };
+            if sub
+                .get_subcommands()
+                .any(|s| !s.is_hide_set() && s.get_name() != "help")
+            {
                 walk(sub, &path, out);
             } else {
                 out.push((path, sub));
@@ -177,7 +203,11 @@ fn push_command(out: &mut String, path: &str, mut cmd: Command) {
 
     let args: Vec<&Arg> = cmd
         .get_arguments()
-        .filter(|a| !a.is_global_set() && !a.is_hide_set() && !matches!(a.get_id().as_str(), "help" | "version"))
+        .filter(|a| {
+            !a.is_global_set()
+                && !a.is_hide_set()
+                && !matches!(a.get_id().as_str(), "help" | "version")
+        })
         .collect();
     if !args.is_empty() {
         push_properties(out, args.into_iter());
@@ -190,17 +220,28 @@ fn push_properties<'a>(out: &mut String, args: impl Iterator<Item = &'a Arg>) {
         let (name, kind) = arg_name(arg);
         out.push_str(&format!("  <Property name=\"{name}\" type=\"{kind}\">\n"));
 
-        let mut text = arg.get_long_help().or(arg.get_help()).map(|h| sentence(&h.to_string())).unwrap_or_default();
+        let mut text = arg
+            .get_long_help()
+            .or(arg.get_help())
+            .map(|h| sentence(&h.to_string()))
+            .unwrap_or_default();
         if arg.is_required_set() && arg.is_positional() {
             text.push_str(" Required.");
         }
-        let defaults: Vec<String> = arg.get_default_values().iter().map(|v| v.to_string_lossy().into_owned()).collect();
+        let defaults: Vec<String> = arg
+            .get_default_values()
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect();
         if !defaults.is_empty() && kind != "flag" {
             text.push(' ');
             text.push_str(&default_text(&defaults.join(", "), true));
         }
         if let Some(env) = arg.get_env() {
-            text.push_str(&format!(" Environment variable: `{}`.", env.to_string_lossy()));
+            text.push_str(&format!(
+                " Environment variable: `{}`.",
+                env.to_string_lossy()
+            ));
         }
 
         out.push_str(&format!("    {}\n", text.trim()));
@@ -222,8 +263,15 @@ fn arg_name(arg: &Arg) -> (String, &'static str) {
 
     let long = arg.get_long().map(|l| format!("--{l}"));
     let short = arg.get_short().map(|s| format!("-{s}"));
-    let flags = [short, long].into_iter().flatten().collect::<Vec<_>>().join(", ");
-    if matches!(arg.get_action(), ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count) {
+    let flags = [short, long]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if matches!(
+        arg.get_action(),
+        ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count
+    ) {
         return (flags, "flag");
     }
 
@@ -250,7 +298,9 @@ fn sentence(text: &str) -> String {
             if i % 2 == 1 {
                 return part.to_string();
             }
-            part.replace('<', "&lt;").replace('{', "&#123;").replace('}', "&#125;")
+            part.replace('<', "&lt;")
+                .replace('{', "&#123;")
+                .replace('}', "&#125;")
         })
         .collect::<Vec<_>>()
         .join("`");
@@ -286,10 +336,17 @@ mod tests {
         let paths: Vec<String> = leaves(&root).into_iter().map(|(p, _)| p).collect();
 
         for path in &paths {
-            assert!(REFERENCE.iter().any(|r| r.command == path), "add `{path}` to REFERENCE in docs.rs");
+            assert!(
+                REFERENCE.iter().any(|r| r.command == path),
+                "add `{path}` to REFERENCE in docs.rs"
+            );
         }
         for r in REFERENCE {
-            assert!(paths.iter().any(|p| p == r.command), "REFERENCE has `{}`, which is not a command", r.command);
+            assert!(
+                paths.iter().any(|p| p == r.command),
+                "REFERENCE has `{}`, which is not a command",
+                r.command
+            );
         }
     }
 
@@ -301,7 +358,9 @@ mod tests {
     #[test]
     fn renders_endpoint_scope_usage_and_options() {
         let md = markdown();
-        assert!(md.contains("## ranksy rankings get {{ tag: 'GET', label: '/api/v1/apps/:app/rankings' }}"));
+        assert!(md.contains(
+            "## ranksy rankings get {{ tag: 'GET', label: '/api/v1/apps/:app/rankings' }}"
+        ));
         assert!(md.contains("- Scope: [`rankings:read`](/authentication#scopes)\n- API reference: [Current rankings](/rankings#current-rankings)"));
         assert!(md.contains("```bash\nranksy rankings get [OPTIONS]\n```"));
         assert!(md.contains("<Property name=\"--keyword <KEYWORD>\" type=\"option\">"));
@@ -316,17 +375,35 @@ mod tests {
 
     #[test]
     fn escapes_jsx_outside_backticks_only() {
-        assert_eq!(sentence("default: <dir> or `<dir>`"), "default: &lt;dir> or `<dir>`.");
+        assert_eq!(
+            sentence("default: <dir> or `<dir>`"),
+            "default: &lt;dir> or `<dir>`."
+        );
         assert_eq!(sentence("a {b}"), "a &#123;b&#125;.");
         assert_eq!(sentence("Already done."), "Already done.");
-        assert_eq!(sentence("Chrome port (default 9333)"), "Chrome port (default 9333).");
+        assert_eq!(
+            sentence("Chrome port (default 9333)"),
+            "Chrome port (default 9333)."
+        );
     }
 
     #[test]
     fn moves_a_trailing_default_into_its_own_sentence() {
-        assert_eq!(sentence("Rows to return, 1 to 50 [default: 20]"), "Rows to return, 1 to 50. Default: `20`.");
-        assert_eq!(sentence("First day, YYYY-MM-DD [default: 30 days ago]"), "First day, YYYY-MM-DD. Default: 30 days ago.");
-        assert_eq!(sentence("Last day [default: today]"), "Last day. Default: today.");
-        assert_eq!(sentence("`daily` or `weekly` [default: weekly]"), "`daily` or `weekly`. Default: `weekly`.");
+        assert_eq!(
+            sentence("Rows to return, 1 to 50 [default: 20]"),
+            "Rows to return, 1 to 50. Default: `20`."
+        );
+        assert_eq!(
+            sentence("First day, YYYY-MM-DD [default: 30 days ago]"),
+            "First day, YYYY-MM-DD. Default: 30 days ago."
+        );
+        assert_eq!(
+            sentence("Last day [default: today]"),
+            "Last day. Default: today."
+        );
+        assert_eq!(
+            sentence("`daily` or `weekly` [default: weekly]"),
+            "`daily` or `weekly`. Default: `weekly`."
+        );
     }
 }

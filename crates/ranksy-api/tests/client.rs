@@ -8,7 +8,9 @@ async fn whoami_sends_bearer_and_returns_json() {
     Mock::given(method("GET"))
         .and(path("/apps"))
         .and(header("authorization", "Bearer test-key"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 7}]})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 7}]})),
+        )
         .mount(&server)
         .await;
 
@@ -33,11 +35,17 @@ async fn retries_on_500_then_succeeds() {
         .await;
     Mock::given(method("GET"))
         .and(path("/apps"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 1}]})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{"id": 1}]})),
+        )
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
     assert_eq!(client.whoami().await.unwrap()["data"][0]["id"], 1);
 }
 
@@ -53,8 +61,15 @@ async fn track_keyword_posts_the_raw_keyword() {
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
-    let v = client.track_keyword("app_1", "Email Marketing").await.unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
+    let v = client
+        .track_keyword("app_1", "Email Marketing")
+        .await
+        .unwrap();
     assert_eq!(v["slug"], "email-marketing");
 }
 
@@ -68,8 +83,15 @@ async fn untrack_keyword_deletes_by_slug_and_confirms() {
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
-    let v = client.untrack_keyword("app_1", "Email Marketing").await.unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
+    let v = client
+        .untrack_keyword("app_1", "Email Marketing")
+        .await
+        .unwrap();
     assert_eq!(v["object"], "untracked_keyword");
     assert_eq!(v["slug"], "email-marketing");
     assert_eq!(v["keyword"], "Email Marketing");
@@ -80,13 +102,22 @@ async fn untrack_missing_keyword_surfaces_404() {
     let server = MockServer::start().await;
     Mock::given(method("DELETE"))
         .and(path("/apps/app_1/keywords/nope"))
-        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({"error": "not tracked"})))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(serde_json::json!({"error": "not tracked"})),
+        )
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
     let err = client.untrack_keyword("app_1", "nope").await.unwrap_err();
-    assert!(matches!(err, ranksy_api::ApiError::Status { code: 404, .. }));
+    assert!(matches!(
+        err,
+        ranksy_api::ApiError::Status { code: 404, .. }
+    ));
 }
 
 #[tokio::test]
@@ -94,11 +125,18 @@ async fn get_listing_reads_the_listing_endpoint() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/apps/app_1/listing"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"object": "listing", "name": "My App"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"object": "listing", "name": "My App"})),
+        )
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
     let v = client.get_listing("app_1").await.unwrap();
     assert_eq!(v["name"], "My App");
 }
@@ -112,7 +150,14 @@ async fn rankings_get_with_keyword_hits_by_keyword_slug() {
         .mount(&server)
         .await;
 
-    let client = RanksyClient::new(ClientConfig { api_key: "k".into(), base_url: server.uri() }).unwrap();
-    let v = client.get_rankings("app_1", Some("Email Marketing")).await.unwrap();
+    let client = RanksyClient::new(ClientConfig {
+        api_key: "k".into(),
+        base_url: server.uri(),
+    })
+    .unwrap();
+    let v = client
+        .get_rankings("app_1", Some("Email Marketing"))
+        .await
+        .unwrap();
     assert_eq!(v[0]["rank"], 3);
 }

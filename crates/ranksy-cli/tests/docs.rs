@@ -11,10 +11,16 @@ fn ranksy(args: &[&str]) -> std::process::Output {
 #[test]
 fn docs_markdown_prints_the_reference_without_an_api_key() {
     let out = ranksy(&["docs", "markdown"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let md = String::from_utf8_lossy(&out.stdout);
     assert!(md.starts_with("## Global options\n"), "got: {md}");
-    assert!(md.contains("## ranksy ads sync {{ tag: 'POST', label: '/api/v1/apps/:app/shopify-ads/sync' }}"));
+    assert!(md.contains(
+        "## ranksy ads sync {{ tag: 'POST', label: '/api/v1/apps/:app/shopify-ads/sync' }}"
+    ));
 }
 
 #[test]
