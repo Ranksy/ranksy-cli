@@ -17,16 +17,36 @@ const NONE: &str = "–";
 /// The endpoint and query of a read command, or `None` for connect, disconnect and sync.
 pub fn request(cmd: &AdsCmd) -> Option<(&'static str, Vec<(&'static str, String)>)> {
     let (suffix, filters, mut extra) = match cmd {
-        AdsCmd::Overview { filters, compare } => {
-            ("shopify-ads/overview", filters, if *compare { vec![("compare", "true".to_string())] } else { vec![] })
+        AdsCmd::Overview { filters, compare } => (
+            "shopify-ads/overview",
+            filters,
+            if *compare {
+                vec![("compare", "true".to_string())]
+            } else {
+                vec![]
+            },
+        ),
+        AdsCmd::Trend { filters, grouping } => {
+            ("shopify-ads/trend", filters, opt("grouping", grouping))
         }
-        AdsCmd::Trend { filters, grouping } => ("shopify-ads/trend", filters, opt("grouping", grouping)),
-        AdsCmd::Keywords { filters, sort_by, limit } => {
-            ("shopify-ads/keywords", filters, [opt("sort_by", sort_by), opt("limit", limit)].concat())
-        }
-        AdsCmd::SearchTerms { filters, flag, limit } => {
-            ("shopify-ads/search-terms", filters, [opt("flag", flag), opt("limit", limit)].concat())
-        }
+        AdsCmd::Keywords {
+            filters,
+            sort_by,
+            limit,
+        } => (
+            "shopify-ads/keywords",
+            filters,
+            [opt("sort_by", sort_by), opt("limit", limit)].concat(),
+        ),
+        AdsCmd::SearchTerms {
+            filters,
+            flag,
+            limit,
+        } => (
+            "shopify-ads/search-terms",
+            filters,
+            [opt("flag", flag), opt("limit", limit)].concat(),
+        ),
         AdsCmd::Connect { .. } | AdsCmd::Disconnect { .. } | AdsCmd::Sync { .. } => return None,
     };
 
@@ -53,7 +73,10 @@ fn opt<T: ToString>(key: &'static str, value: &Option<T>) -> Vec<(&'static str, 
 pub async fn fetch(client: &RanksyClient, app: &str, cmd: &AdsCmd) -> Result<Value> {
     let (suffix, query) = request(cmd).ok_or_else(|| anyhow!("not an ads read command"))?;
     let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    client.get_app(app, suffix, &query).await.map_err(read_error)
+    client
+        .get_app(app, suffix, &query)
+        .await
+        .map_err(read_error)
 }
 
 /// A readable error for the ads read endpoints.
@@ -61,11 +84,16 @@ pub fn read_error(e: ApiError) -> anyhow::Error {
     let ApiError::Status { code, body } = &e else {
         return e.into();
     };
-    let error = serde_json::from_str::<Value>(body).ok().and_then(|v| v.get("error").cloned()).unwrap_or(Value::Null);
+    let error = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").cloned())
+        .unwrap_or(Value::Null);
     let message = error.get("message").and_then(Value::as_str);
 
     match code {
-        401 => anyhow!("Ranksy rejected the API key (401). Check `ranksy login`, RANKSY_API_KEY or --api-key."),
+        401 => anyhow!(
+            "Ranksy rejected the API key (401). Check `ranksy login`, RANKSY_API_KEY or --api-key."
+        ),
         403 => anyhow!("The API key is missing a scope (403): the ads commands need `ads:read`."),
         404 if error.get("param").and_then(Value::as_str) == Some("campaign") => anyhow!(
             "Campaign not found: {}",
@@ -87,11 +115,21 @@ pub fn table(cmd: &AdsCmd, v: &Value) -> String {
             out.push(rows_or(v, "series", TREND, "No ads data in this period."));
         }
         AdsCmd::Keywords { .. } => {
-            out.push(rows_or(v, "keywords", KEYWORDS, "No keywords in this period."));
+            out.push(rows_or(
+                v,
+                "keywords",
+                KEYWORDS,
+                "No keywords in this period.",
+            ));
             out.extend(shown(v, "keywords"));
         }
         AdsCmd::SearchTerms { .. } => {
-            out.push(rows_or(v, "search_terms", SEARCH_TERMS, "No search terms in this period."));
+            out.push(rows_or(
+                v,
+                "search_terms",
+                SEARCH_TERMS,
+                "No search terms in this period.",
+            ));
             out.extend(shown(v, "search_terms"));
         }
         AdsCmd::Connect { .. } | AdsCmd::Disconnect { .. } | AdsCmd::Sync { .. } => {}
@@ -107,9 +145,19 @@ fn header(v: &Value) -> String {
         text(&v["period"]["end_date"])
     )];
     if let Some(c) = v.get("campaign").filter(|c| !c.is_null()) {
-        parts.push(format!("Campaign: {} ({})", text(&c["name"]), text(&c["shopify_campaign_id"])));
+        parts.push(format!(
+            "Campaign: {} ({})",
+            text(&c["name"]),
+            text(&c["shopify_campaign_id"])
+        ));
     }
-    for (label, key) in [("Ad type", "ad_type"), ("Grouping", "grouping"), ("Level", "level"), ("Sort", "sort_by"), ("Flag", "flag")] {
+    for (label, key) in [
+        ("Ad type", "ad_type"),
+        ("Grouping", "grouping"),
+        ("Level", "level"),
+        ("Sort", "sort_by"),
+        ("Flag", "flag"),
+    ] {
         if let Some(s) = v.get(key).and_then(Value::as_str) {
             parts.push(format!("{label}: {s}"));
         }
@@ -216,7 +264,11 @@ fn overview(v: &Value, out: &mut Vec<String>) {
     let current = &v["kpis"]["current"];
     let previous = v["kpis"].get("previous").filter(|p| !p.is_null());
     let mut kpis = Builder::default();
-    kpis.push_record(if previous.is_some() { vec!["", "Current", "Previous"] } else { vec!["", "Value"] });
+    kpis.push_record(if previous.is_some() {
+        vec!["", "Current", "Previous"]
+    } else {
+        vec!["", "Value"]
+    });
     for (label, key) in KPIS.iter().filter(|(_, k)| current.get(*k).is_some()) {
         let mut row = vec![label.to_string(), text(&current[*key])];
         if let Some(p) = previous {
@@ -246,16 +298,31 @@ fn overview(v: &Value, out: &mut Vec<String>) {
 
     let costs = &v["funnel"]["stage_costs"];
     if costs.is_object() {
-        out.push(format!("Cost per click {} · per install {} · per paying customer {}", text(&costs["cpc"]), text(&costs["cpi"]), text(&costs["cac"])));
+        out.push(format!(
+            "Cost per click {} · per install {} · per paying customer {}",
+            text(&costs["cpc"]),
+            text(&costs["cpi"]),
+            text(&costs["cac"])
+        ));
     }
 
     out.push(rows_or(v, "campaigns", CAMPAIGNS, "No campaigns."));
 
     if let Some(h) = v.get("hidden_archived").filter(|h| h.is_object()) {
-        out.push(format!("Left out: {} archived campaign(s) that spent {}.", text(&h["count"]), text(&h["spend"])));
+        out.push(format!(
+            "Left out: {} archived campaign(s) that spent {}.",
+            text(&h["count"]),
+            text(&h["spend"])
+        ));
     }
-    if let Some(n) = v["excluded_csv_reports"].as_array().map(Vec::len).filter(|n| *n > 0) {
-        out.push(format!("Left out: {n} uploaded CSV report(s) that do not fit inside the period."));
+    if let Some(n) = v["excluded_csv_reports"]
+        .as_array()
+        .map(Vec::len)
+        .filter(|n| *n > 0)
+    {
+        out.push(format!(
+            "Left out: {n} uploaded CSV report(s) that do not fit inside the period."
+        ));
     }
 }
 
@@ -270,11 +337,20 @@ fn rows_or(v: &Value, key: &str, columns: &[(&str, &str)], empty: &str) -> Strin
 /// Keeps a column only when at least one row has its field, so absent fields (revenue and ROAS
 /// without `metrics:read`, campaign-only keyword fields) leave no empty column.
 fn rows_table(rows: &[Value], columns: &[(&str, &str)]) -> String {
-    let present: Vec<&(&str, &str)> = columns.iter().filter(|(_, k)| rows.iter().any(|r| r.get(*k).is_some() || flags_key(r, k))).collect();
+    let present: Vec<&(&str, &str)> = columns
+        .iter()
+        .filter(|(_, k)| rows.iter().any(|r| r.get(*k).is_some() || flags_key(r, k)))
+        .collect();
     let mut b = Builder::default();
     b.push_record(present.iter().map(|(h, _)| h.to_string()));
     for row in rows {
-        b.push_record(present.iter().map(|(_, k)| if *k == "flags" { flags(row) } else { text(row.get(*k).unwrap_or(&Value::Null)) }));
+        b.push_record(present.iter().map(|(_, k)| {
+            if *k == "flags" {
+                flags(row)
+            } else {
+                text(row.get(*k).unwrap_or(&Value::Null))
+            }
+        }));
     }
     b.build().with(Style::rounded()).to_string()
 }
@@ -293,7 +369,11 @@ fn flags_key(row: &Value, key: &str) -> bool {
 fn flags(row: &Value) -> String {
     let list: Vec<String> = match row.get("flags").and_then(Value::as_array) {
         Some(a) => a.iter().map(text).collect(),
-        None => TERM_FLAGS.iter().filter(|(k, _)| row[*k].as_bool() == Some(true)).map(|(_, label)| label.to_string()).collect(),
+        None => TERM_FLAGS
+            .iter()
+            .filter(|(k, _)| row[*k].as_bool() == Some(true))
+            .map(|(_, label)| label.to_string())
+            .collect(),
     };
     list.join(", ")
 }
@@ -320,16 +400,28 @@ mod tests {
     use serde_json::json;
 
     fn filters() -> AdsReportArgs {
-        AdsReportArgs { start_date: None, end_date: None, campaign: None, ad_type: None }
+        AdsReportArgs {
+            start_date: None,
+            end_date: None,
+            campaign: None,
+            ad_type: None,
+        }
     }
 
     fn overview_cmd() -> AdsCmd {
-        AdsCmd::Overview { filters: filters(), compare: false }
+        AdsCmd::Overview {
+            filters: filters(),
+            compare: false,
+        }
     }
 
     #[test]
     fn sends_only_the_flags_that_were_given() {
-        let (suffix, query) = request(&AdsCmd::Trend { filters: filters(), grouping: None }).unwrap();
+        let (suffix, query) = request(&AdsCmd::Trend {
+            filters: filters(),
+            grouping: None,
+        })
+        .unwrap();
         assert_eq!(suffix, "shopify-ads/trend");
         assert!(query.is_empty());
     }
@@ -364,9 +456,18 @@ mod tests {
 
     #[test]
     fn overview_sends_compare_and_search_terms_its_flag() {
-        let (_, q) = request(&AdsCmd::Overview { filters: filters(), compare: true }).unwrap();
+        let (_, q) = request(&AdsCmd::Overview {
+            filters: filters(),
+            compare: true,
+        })
+        .unwrap();
         assert_eq!(q, [("compare", "true".to_string())]);
-        let (suffix, q) = request(&AdsCmd::SearchTerms { filters: filters(), flag: Some("converting".into()), limit: None }).unwrap();
+        let (suffix, q) = request(&AdsCmd::SearchTerms {
+            filters: filters(),
+            flag: Some("converting".into()),
+            limit: None,
+        })
+        .unwrap();
         assert_eq!(suffix, "shopify-ads/search-terms");
         assert_eq!(q, [("flag", "converting".to_string())]);
     }
@@ -402,7 +503,10 @@ mod tests {
     fn overview_shows_revenue_when_the_key_can_read_it() {
         let out = table(&overview_cmd(), &overview_body(true));
         assert!(out.contains("Period: 2026-09-19 to 2026-10-18"), "{out}");
-        assert!(out.contains("Revenue") && out.contains("ROAS") && out.contains("3.2"), "{out}");
+        assert!(
+            out.contains("Revenue") && out.contains("ROAS") && out.contains("3.2"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -426,14 +530,23 @@ mod tests {
         body["message"] = json!("No ads activity in this period.");
         body["campaigns"] = json!([]);
         let out = table(&overview_cmd(), &body);
-        assert!(out.contains("No ads activity in this period.") && out.contains("No campaigns."), "{out}");
+        assert!(
+            out.contains("No ads activity in this period.") && out.contains("No campaigns."),
+            "{out}"
+        );
     }
 
     #[test]
     fn overview_with_compare_shows_the_previous_period() {
         let mut body = overview_body(false);
         body["kpis"]["previous"] = json!({"spend": 10.0});
-        let out = table(&AdsCmd::Overview { filters: filters(), compare: true }, &body);
+        let out = table(
+            &AdsCmd::Overview {
+                filters: filters(),
+                compare: true,
+            },
+            &body,
+        );
         assert!(out.contains("Previous") && out.contains("10.0"), "{out}");
     }
 
@@ -444,8 +557,17 @@ mod tests {
             "grouping": "day",
             "series": [{"date": "2026-10-16", "spend": 5.0, "impressions": 10, "clicks": 0, "installs": 0, "ctr": 0.0, "cpi": null, "avg_position": null}]
         });
-        let out = table(&AdsCmd::Trend { filters: filters(), grouping: None }, &body);
-        assert!(out.contains("Grouping: day") && out.contains("2026-10-16"), "{out}");
+        let out = table(
+            &AdsCmd::Trend {
+                filters: filters(),
+                grouping: None,
+            },
+            &body,
+        );
+        assert!(
+            out.contains("Grouping: day") && out.contains("2026-10-16"),
+            "{out}"
+        );
         assert!(!out.contains("ROAS") && out.contains('–'), "{out}");
     }
 
@@ -457,11 +579,27 @@ mod tests {
             "total_count": 37,
             "keywords": [{"keyword": "newsletter app", "match_type": "exact", "bid": 0.9, "cpi": null, "flags": ["spend_no_installs", "bid_below_suggested_range"]}]
         });
-        let out = table(&AdsCmd::Keywords { filters: filters(), sort_by: None, limit: None }, &body);
-        assert!(out.contains("spend_no_installs, bid_below_suggested_range"), "{out}");
+        let out = table(
+            &AdsCmd::Keywords {
+                filters: filters(),
+                sort_by: None,
+                limit: None,
+            },
+            &body,
+        );
+        assert!(
+            out.contains("spend_no_installs, bid_below_suggested_range"),
+            "{out}"
+        );
         assert!(out.contains("Showing 1 of 37."), "{out}");
-        assert!(!out.contains("Revenue") && !out.contains("Customers"), "{out}");
-        assert!(!out.contains("Relevance") && !out.contains("Suggested low"), "{out}");
+        assert!(
+            !out.contains("Revenue") && !out.contains("Customers"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("Relevance") && !out.contains("Suggested low"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -472,10 +610,23 @@ mod tests {
             "keywords": [{"keyword": "block ip", "match_type": "exact", "bid": 7.0, "suggested_bid_lower": 6.5, "suggested_bid_upper": 8.25,
                 "bid_position": "within", "relevance_category": "high", "flags": []}]
         });
-        let out = table(&AdsCmd::Keywords { filters: filters(), sort_by: None, limit: None }, &body);
+        let out = table(
+            &AdsCmd::Keywords {
+                filters: filters(),
+                sort_by: None,
+                limit: None,
+            },
+            &body,
+        );
         assert!(out.contains("Relevance") && out.contains("high"), "{out}");
-        assert!(out.contains("Suggested low") && out.contains("6.5"), "{out}");
-        assert!(out.contains("Suggested high") && out.contains("8.25"), "{out}");
+        assert!(
+            out.contains("Suggested low") && out.contains("6.5"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Suggested high") && out.contains("8.25"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -485,7 +636,14 @@ mod tests {
             "total_count": 1,
             "search_terms": [{"search_term": "abandoned cart email", "keyword": "email marketing", "match_type": null, "not_a_keyword": true, "spending_no_installs": false, "converting_not_yet_keyword": true}]
         });
-        let out = table(&AdsCmd::SearchTerms { filters: filters(), flag: None, limit: None }, &body);
+        let out = table(
+            &AdsCmd::SearchTerms {
+                filters: filters(),
+                flag: None,
+                limit: None,
+            },
+            &body,
+        );
         assert!(out.contains("not a keyword, add as keyword"), "{out}");
         assert!(!out.contains("Showing"), "{out}");
     }
@@ -493,31 +651,56 @@ mod tests {
     #[test]
     fn empty_lists_say_so() {
         let body = json!({"period": {"start_date": "2026-10-01", "end_date": "2026-10-18"}, "keywords": [], "total_count": 0});
-        let out = table(&AdsCmd::Keywords { filters: filters(), sort_by: None, limit: None }, &body);
+        let out = table(
+            &AdsCmd::Keywords {
+                filters: filters(),
+                sort_by: None,
+                limit: None,
+            },
+            &body,
+        );
         assert!(out.contains("No keywords in this period."), "{out}");
     }
 
     fn status(code: u16, body: Value) -> ApiError {
-        ApiError::Status { code, body: body.to_string() }
+        ApiError::Status {
+            code,
+            body: body.to_string(),
+        }
     }
 
     #[test]
     fn maps_a_missing_campaign_to_a_clear_message() {
-        let e = read_error(status(404, json!({"error": {"code": "resource_not_found", "param": "campaign", "message": "No Shopify ads campaign 'x' for this app."}})));
-        assert_eq!(e.to_string(), "Campaign not found: No Shopify ads campaign 'x' for this app.");
+        let e = read_error(status(
+            404,
+            json!({"error": {"code": "resource_not_found", "param": "campaign", "message": "No Shopify ads campaign 'x' for this app."}}),
+        ));
+        assert_eq!(
+            e.to_string(),
+            "Campaign not found: No Shopify ads campaign 'x' for this app."
+        );
     }
 
     #[test]
     fn maps_forbidden_to_the_missing_scope() {
-        let e = read_error(status(403, json!({"error": {"code": "insufficient_permissions"}})));
+        let e = read_error(status(
+            403,
+            json!({"error": {"code": "insufficient_permissions"}}),
+        ));
         assert!(e.to_string().contains("`ads:read`"), "{e}");
     }
 
     #[test]
     fn other_errors_keep_the_api_message() {
-        let e = read_error(status(404, json!({"error": {"code": "resource_not_found", "message": "App not found."}})));
+        let e = read_error(status(
+            404,
+            json!({"error": {"code": "resource_not_found", "message": "App not found."}}),
+        ));
         assert_eq!(e.to_string(), "api returned 404: App not found.");
-        let e = read_error(ApiError::Status { code: 500, body: "boom".into() });
+        let e = read_error(ApiError::Status {
+            code: 500,
+            body: "boom".into(),
+        });
         assert_eq!(e.to_string(), "api returned 500: boom");
     }
 }
