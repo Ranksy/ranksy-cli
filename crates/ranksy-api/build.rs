@@ -5,8 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed={spec_path}");
 
     let file = fs::File::open(spec_path).expect("open openapi.json");
-    let spec: openapiv3::OpenAPI =
-        serde_json::from_reader(file).expect("parse openapi.json");
+    let spec: openapiv3::OpenAPI = serde_json::from_reader(file).expect("parse openapi.json");
 
     let mut generator = progenitor::Generator::default();
     let tokens = generator.generate_tokens(&spec).expect("generate client");

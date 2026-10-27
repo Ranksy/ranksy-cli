@@ -35,26 +35,47 @@ impl RanksyClient {
             .default_headers(headers)
             .user_agent(concat!("ranksy-cli/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { http, base_url: cfg.base_url.trim_end_matches('/').to_string() })
+        Ok(Self {
+            http,
+            base_url: cfg.base_url.trim_end_matches('/').to_string(),
+        })
     }
 
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::GET, path, query, None, None).await
+        self.send(reqwest::Method::GET, path, query, None, None)
+            .await
     }
 
-    async fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::POST, path, &[], Some(&body), None).await
+    async fn post(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        self.send(reqwest::Method::POST, path, &[], Some(&body), None)
+            .await
     }
 
     async fn delete(&self, path: &str) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::DELETE, path, &[], None, None).await
+        self.send(reqwest::Method::DELETE, path, &[], None, None)
+            .await
     }
 
     /// POST an arbitrary JSON body to `path` (relative to the base URL) with the usual
     /// 429/5xx retries and a long timeout, for bulk endpoints such as the ads sync whose
     /// requests carry tens of thousands of rows.
-    pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value, ApiError> {
-        self.send(reqwest::Method::POST, path, &[], Some(body), Some(BULK_TIMEOUT)).await
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        self.send(
+            reqwest::Method::POST,
+            path,
+            &[],
+            Some(body),
+            Some(BULK_TIMEOUT),
+        )
+        .await
     }
 
     /// Generic GET against `/apps/{app}/{suffix}` with optional query params.
@@ -112,15 +133,27 @@ impl RanksyClient {
         self.get("/apps", &[]).await
     }
     /// One page of `GET /apps`, for callers that need every app (`ranksy ads connect`).
-    pub async fn list_apps_page(&self, page: u32, per_page: u32) -> Result<serde_json::Value, ApiError> {
+    pub async fn list_apps_page(
+        &self,
+        page: u32,
+        per_page: u32,
+    ) -> Result<serde_json::Value, ApiError> {
         let (page, per_page) = (page.to_string(), per_page.to_string());
-        self.get("/apps", &[("page", page.as_str()), ("per_page", per_page.as_str())]).await
+        self.get(
+            "/apps",
+            &[("page", page.as_str()), ("per_page", per_page.as_str())],
+        )
+        .await
     }
     /// Current ranking snapshot for the app. With a keyword, narrows to that one
     /// keyword via the by-keyword endpoint (the rankings list has no query-param
     /// filter, but `rankings/by-keyword/{slug}` is the same keyword branch scoped
     /// to one term).
-    pub async fn get_rankings(&self, app: &str, keyword: Option<&str>) -> Result<serde_json::Value, ApiError> {
+    pub async fn get_rankings(
+        &self,
+        app: &str,
+        keyword: Option<&str>,
+    ) -> Result<serde_json::Value, ApiError> {
         if let Some(kw) = keyword {
             return self.rankings_by_keyword(app, kw, None).await;
         }
@@ -141,7 +174,8 @@ impl RanksyClient {
             Some(l) => vec![("limit", l.as_str())],
             None => vec![],
         };
-        self.get(&format!("/apps/{app}/rankings/by-keyword/{slug}"), &query).await
+        self.get(&format!("/apps/{app}/rankings/by-keyword/{slug}"), &query)
+            .await
     }
     pub async fn list_keywords(&self, app: &str) -> Result<serde_json::Value, ApiError> {
         self.get(&format!("/apps/{app}/keywords"), &[]).await
@@ -149,7 +183,11 @@ impl RanksyClient {
     /// Track one keyword. `POST /apps/{app}/keywords` matches on the keyword
     /// TEXT server-side, so send the raw keyword — not a slug. 201 when newly
     /// tracked, 200 on an idempotent re-track; both return the follow row.
-    pub async fn track_keyword(&self, app: &str, keyword: &str) -> Result<serde_json::Value, ApiError> {
+    pub async fn track_keyword(
+        &self,
+        app: &str,
+        keyword: &str,
+    ) -> Result<serde_json::Value, ApiError> {
         self.post(
             &format!("/apps/{app}/keywords"),
             serde_json::json!({ "keyword": keyword }),
@@ -161,7 +199,11 @@ impl RanksyClient {
     /// and `untrack email-marketing` both hit `email-marketing`. The endpoint
     /// 204s with no body, so synthesize a small confirmation for output; a
     /// keyword that isn't tracked comes back as a 404 status error.
-    pub async fn untrack_keyword(&self, app: &str, keyword: &str) -> Result<serde_json::Value, ApiError> {
+    pub async fn untrack_keyword(
+        &self,
+        app: &str,
+        keyword: &str,
+    ) -> Result<serde_json::Value, ApiError> {
         let slug = slugify(keyword);
         self.delete(&format!("/apps/{app}/keywords/{slug}")).await?;
         Ok(serde_json::json!({
@@ -211,7 +253,11 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client(server: &MockServer) -> RanksyClient {
-        RanksyClient::new(ClientConfig { api_key: "rk_test_x".into(), base_url: format!("{}/api/v1/", server.uri()) }).unwrap()
+        RanksyClient::new(ClientConfig {
+            api_key: "rk_test_x".into(),
+            base_url: format!("{}/api/v1/", server.uri()),
+        })
+        .unwrap()
     }
 
     #[tokio::test]
@@ -230,12 +276,18 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/api/v1/apps/01A/shopify-ads/sync"))
             .and(body_json(&body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": { "days": { "stored": 1 } } })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "data": { "days": { "stored": 1 } } })),
+            )
             .expect(1)
             .mount(&server)
             .await;
 
-        let res = client(&server).post_json("/apps/01A/shopify-ads/sync", &body).await.unwrap();
+        let res = client(&server)
+            .post_json("/apps/01A/shopify-ads/sync", &body)
+            .await
+            .unwrap();
         assert_eq!(res["data"]["days"]["stored"], 1);
     }
 
@@ -248,7 +300,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = client(&server).post_json("/apps/01A/shopify-ads/sync", &serde_json::json!({})).await.unwrap_err();
+        let err = client(&server)
+            .post_json("/apps/01A/shopify-ads/sync", &serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ApiError::Status { code: 403, ref body } if body == "missing scope"));
     }
 
@@ -259,7 +314,9 @@ mod tests {
             .and(path("/api/v1/apps"))
             .and(query_param("page", "2"))
             .and(query_param("per_page", "100"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": [] })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": [] })),
+            )
             .expect(1)
             .mount(&server)
             .await;

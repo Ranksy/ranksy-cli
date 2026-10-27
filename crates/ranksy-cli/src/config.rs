@@ -141,7 +141,11 @@ pub fn resolve(
         .or_else(|| file.base_url.clone())
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
     let app = flag_app.or_else(|| file.app.clone());
-    Ok(Resolved { api_key, base_url, app })
+    Ok(Resolved {
+        api_key,
+        base_url,
+        app,
+    })
 }
 
 pub fn config_path() -> PathBuf {
@@ -164,7 +168,9 @@ pub fn load() -> ConfigFile {
 /// doesn't parse is an error, so saving never overwrites settings we couldn't read.
 fn load_for_update(path: &Path) -> Result<ConfigFile, ConfigError> {
     match std::fs::read_to_string(path) {
-        Ok(s) => toml::from_str(&s).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display()))),
+        Ok(s) => {
+            toml::from_str(&s).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display())))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConfigFile::default()),
         Err(e) => Err(ConfigError::Io(e)),
     }
@@ -212,12 +218,24 @@ mod tests {
     use super::*;
 
     fn file() -> ConfigFile {
-        ConfigFile { api_key: Some("file-key".into()), app: Some("app-file".into()), ..Default::default() }
+        ConfigFile {
+            api_key: Some("file-key".into()),
+            app: Some("app-file".into()),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn flag_beats_env_beats_file() {
-        let r = resolve(Some("flag".into()), Some("env".into()), None, None, None, &file()).unwrap();
+        let r = resolve(
+            Some("flag".into()),
+            Some("env".into()),
+            None,
+            None,
+            None,
+            &file(),
+        )
+        .unwrap();
         assert_eq!(r.api_key, "flag");
     }
 
@@ -237,7 +255,10 @@ mod tests {
     #[test]
     fn missing_key_errors() {
         let empty = ConfigFile::default();
-        assert!(matches!(resolve(None, None, None, None, None, &empty), Err(ConfigError::MissingKey)));
+        assert!(matches!(
+            resolve(None, None, None, None, None, &empty),
+            Err(ConfigError::MissingKey)
+        ));
     }
 
     #[test]
@@ -254,11 +275,19 @@ mod tests {
             apps: BTreeMap::from([
                 (
                     "abc123".to_string(),
-                    AdsApp { ulid: "01JABCDEF".into(), name: Some("Block Country".into()), org: Some("1234567".into()) },
+                    AdsApp {
+                        ulid: "01JABCDEF".into(),
+                        name: Some("Block Country".into()),
+                        org: Some("1234567".into()),
+                    },
                 ),
                 (
                     "def456".to_string(),
-                    AdsApp { ulid: "01JXYZ".into(), name: None, org: Some("7654321".into()) },
+                    AdsApp {
+                        ulid: "01JXYZ".into(),
+                        name: None,
+                        org: Some("7654321".into()),
+                    },
                 ),
             ]),
         }
@@ -292,14 +321,22 @@ mod tests {
         .unwrap();
         let ads = parsed.ads.unwrap();
         assert_eq!(ads.orgs, ["42"]);
-        assert_eq!(ads.apps["key1"], AdsApp { ulid: "01A".into(), name: Some("One".into()), org: None });
+        assert_eq!(
+            ads.apps["key1"],
+            AdsApp {
+                ulid: "01A".into(),
+                name: Some("One".into()),
+                org: None
+            }
+        );
         assert_eq!(ads.apps["key2"].name, None);
         assert_eq!(parsed.api_key.as_deref(), Some("k"));
     }
 
     #[test]
     fn legacy_org_loads_as_orgs_and_is_not_written_back() {
-        let parsed: ConfigFile = toml::from_str("[ads]\norg = \"1\"\n[ads.apps.key1]\nulid = \"01A\"\n").unwrap();
+        let parsed: ConfigFile =
+            toml::from_str("[ads]\norg = \"1\"\n[ads.apps.key1]\nulid = \"01A\"\n").unwrap();
         let ads = parsed.ads.as_ref().unwrap();
         assert_eq!(ads.orgs, ["1"]);
         assert_eq!(ads.apps["key1"].org, None);
@@ -313,21 +350,31 @@ mod tests {
 
     #[test]
     fn legacy_org_merges_with_orgs_without_duplicates() {
-        let parsed: ConfigFile = toml::from_str("[ads]\norg = \"1\"\norgs = [\"2\", \"1\", \"2\"]\n").unwrap();
+        let parsed: ConfigFile =
+            toml::from_str("[ads]\norg = \"1\"\norgs = [\"2\", \"1\", \"2\"]\n").unwrap();
         assert_eq!(parsed.ads.unwrap().orgs, ["2", "1"]);
     }
 
     #[test]
     fn apps_match_their_own_org_and_legacy_apps_match_any() {
-        let scoped = AdsApp { ulid: "01A".into(), name: None, org: Some("1".into()) };
-        let legacy = AdsApp { ulid: "01B".into(), name: None, org: None };
+        let scoped = AdsApp {
+            ulid: "01A".into(),
+            name: None,
+            org: Some("1".into()),
+        };
+        let legacy = AdsApp {
+            ulid: "01B".into(),
+            name: None,
+            org: None,
+        };
         assert!(scoped.in_org("1") && !scoped.in_org("2"));
         assert!(legacy.in_org("1") && legacy.in_org("2"));
     }
 
     #[test]
     fn config_without_ads_still_loads_and_unknown_keys_survive() {
-        let parsed: ConfigFile = toml::from_str("api_key = \"k\"\ntheme = \"dark\"\n[other]\nx = 1\n").unwrap();
+        let parsed: ConfigFile =
+            toml::from_str("api_key = \"k\"\ntheme = \"dark\"\n[other]\nx = 1\n").unwrap();
         assert!(parsed.ads.is_none());
         let again: ConfigFile = toml::from_str(&toml::to_string(&parsed).unwrap()).unwrap();
         assert_eq!(again, parsed);
@@ -339,7 +386,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ranksy-config-test-{}", std::process::id()));
         let path = dir.join("config.toml");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, "api_key = \"keep-me\"\nbase_url = \"https://b.test/api/v1\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "api_key = \"keep-me\"\nbase_url = \"https://b.test/api/v1\"\n",
+        )
+        .unwrap();
 
         let mut loaded = load_for_update(&path).unwrap();
         loaded.ads = Some(ads());
@@ -352,7 +403,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -365,7 +419,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, "api_key = [oops").unwrap();
         assert!(matches!(load_for_update(&path), Err(ConfigError::Parse(_))));
-        assert!(matches!(load_for_update(&dir.join("missing.toml")), Ok(f) if f == ConfigFile::default()));
+        assert!(
+            matches!(load_for_update(&dir.join("missing.toml")), Ok(f) if f == ConfigFile::default())
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

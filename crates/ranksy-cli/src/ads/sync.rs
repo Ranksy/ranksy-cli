@@ -31,7 +31,7 @@ pub struct SyncOptions {
 }
 
 impl SyncOptions {
-    /// The defaults of a bare `ranksy ads sync` (last 3 complete days).
+    /// The defaults of a bare `ranksy ads sync` (today and the 3 days before).
     pub fn first_run() -> Self {
         Self {
             from: None,
@@ -75,15 +75,17 @@ pub fn inclusive_bounds(
     Ok((from, to))
 }
 
-/// Days to pull, newest first. `to` defaults to yesterday (UTC), `from` to `days`
-/// (default 3) complete days ending at `to`.
+/// Days to pull, newest first. Without `to` the range ends today (UTC): today is partial and
+/// is pulled again on every run (Ranksy upserts each campaign-day, so re-running never
+/// duplicates rows). `from` defaults to `days` (default 3) complete days ending at `to`, or at
+/// yesterday when `to` is not given, so a bare sync pulls today plus the 3 days before.
 pub fn day_range(
     from: Option<NaiveDate>,
     to: Option<NaiveDate>,
     days: Option<u32>,
     today: NaiveDate,
 ) -> Result<Vec<NaiveDate>> {
-    let to = match to {
+    let last_complete = match to {
         Some(to) => to,
         None => today
             .checked_sub_signed(Duration::days(1))
@@ -91,10 +93,11 @@ pub fn day_range(
     };
     let from = match from {
         Some(from) => from,
-        None => to
+        None => last_complete
             .checked_sub_signed(Duration::days(i64::from(days.unwrap_or(3)) - 1))
             .ok_or_else(|| anyhow!("--days reaches before the earliest supported date"))?,
     };
+    let to = to.unwrap_or(today);
     if from > to {
         bail!("Invalid --from/--to range: {from} is after {to} (use YYYY-MM-DD).");
     }
@@ -556,7 +559,7 @@ async fn pull_day_cached(
     resume: bool,
     only: Option<&[String]>,
 ) -> Result<Vec<Value>> {
-    if resume {
+    if resume && is_final(day, chrono::Utc::now().date_naive()) {
         if let Some(campaigns) = load_cached_day(out, day, only) {
             log(&format!("{day}: cached"));
             return Ok(campaigns);
@@ -575,6 +578,12 @@ async fn pull_day_cached(
     ));
 
     Ok(campaigns)
+}
+
+/// Whether a day is over (before today, UTC), so a cached pull of it can be reused with
+/// `--resume`. Today (or a later day) is still changing and is always pulled again.
+fn is_final(day: &str, today: NaiveDate) -> bool {
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok_and(|day| day < today)
 }
 
 /// A day pulled for every app lives in `<day>.json`. A day pulled with `--only-app` lives in
@@ -770,9 +779,53 @@ mod tests {
     }
 
     #[test]
-    fn default_range_is_last_three_complete_days_newest_first() {
+    fn default_range_is_today_and_the_last_three_complete_days_newest_first() {
         let days = day_range(None, None, None, d("2026-10-16")).unwrap();
-        assert_eq!(days, [d("2026-10-15"), d("2026-10-14"), d("2026-10-13")]);
+        assert_eq!(
+            days,
+            [
+                d("2026-10-16"),
+                d("2026-10-15"),
+                d("2026-10-14"),
+                d("2026-10-13")
+            ]
+        );
+    }
+
+    #[test]
+    fn days_flag_without_to_counts_complete_days_and_adds_today() {
+        let days = day_range(None, None, Some(1), d("2026-10-16")).unwrap();
+        assert_eq!(days, [d("2026-10-16"), d("2026-10-15")]);
+    }
+
+    #[test]
+    fn to_today_pulls_today() {
+        let days = day_range(None, Some(d("2026-10-16")), Some(1), d("2026-10-16")).unwrap();
+        assert_eq!(days, [d("2026-10-16")]);
+    }
+
+    #[test]
+    fn runs_on_the_same_day_and_overlapping_ranges_pull_the_same_days() {
+        // Ranksy upserts per campaign-day, so a day pulled again replaces itself; the CLI's
+        // part is to name each day once per run, whatever the flags.
+        let today = d("2026-10-16");
+        let first = day_range(None, None, None, today).unwrap();
+        assert_eq!(first, day_range(None, None, None, today).unwrap());
+
+        let (from, to) = inclusive_bounds(None, None, Some(d("2026-10-12")), None).unwrap();
+        let overlap = day_range(from, to, None, today).unwrap();
+        let unique: BTreeSet<_> = overlap.iter().collect();
+        assert_eq!(unique.len(), overlap.len());
+        assert!(first.iter().all(|day| overlap.contains(day)));
+    }
+
+    #[test]
+    fn only_days_before_today_are_reused_from_the_cache() {
+        let today = d("2026-10-16");
+        assert!(is_final("2026-10-15", today));
+        assert!(!is_final("2026-10-16", today));
+        assert!(!is_final("2026-10-17", today));
+        assert!(!is_final("not-a-day", today));
     }
 
     #[test]
@@ -805,7 +858,7 @@ mod tests {
     fn single_day_and_default_to_with_from() {
         assert_eq!(
             day_range(Some(d("2026-10-15")), None, None, d("2026-10-16")).unwrap(),
-            [d("2026-10-15")]
+            [d("2026-10-16"), d("2026-10-15")]
         );
     }
 
@@ -830,10 +883,18 @@ mod tests {
     }
 
     #[test]
-    fn after_alone_runs_up_to_yesterday() {
+    fn after_alone_runs_up_to_today() {
         let (from, to) = inclusive_bounds(None, None, Some(d("2026-10-12")), None).unwrap();
         let days = day_range(from, to, None, d("2026-10-16")).unwrap();
-        assert_eq!(days, [d("2026-10-15"), d("2026-10-14"), d("2026-10-13")]);
+        assert_eq!(
+            days,
+            [
+                d("2026-10-16"),
+                d("2026-10-15"),
+                d("2026-10-14"),
+                d("2026-10-13")
+            ]
+        );
     }
 
     #[test]
@@ -849,7 +910,7 @@ mod tests {
 
     #[test]
     fn chunks_keep_newest_first_order() {
-        let days: Vec<String> = day_range(None, None, Some(10), d("2026-10-16"))
+        let days: Vec<String> = day_range(None, Some(d("2026-10-15")), Some(10), d("2026-10-16"))
             .unwrap()
             .iter()
             .map(NaiveDate::to_string)

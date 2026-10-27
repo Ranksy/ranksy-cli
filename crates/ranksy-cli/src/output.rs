@@ -63,16 +63,24 @@ pub fn render(value: &serde_json::Value, format: Format, columns: &[Column]) -> 
             if columns.is_empty() {
                 let keys = auto_keys(&data);
                 if keys.is_empty() {
-                    return serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+                    return serde_json::to_string_pretty(value)
+                        .unwrap_or_else(|_| value.to_string());
                 }
                 builder.push_record(keys.iter().cloned());
                 for row in &data {
-                    builder.push_record(keys.iter().map(|k| cell(row.get(k).unwrap_or(&serde_json::Value::Null))));
+                    builder.push_record(
+                        keys.iter()
+                            .map(|k| cell(row.get(k).unwrap_or(&serde_json::Value::Null))),
+                    );
                 }
             } else {
                 builder.push_record(columns.iter().map(|c| c.header.to_string()));
                 for row in &data {
-                    builder.push_record(columns.iter().map(|c| cell(row.get(c.key).unwrap_or(&serde_json::Value::Null))));
+                    builder.push_record(
+                        columns
+                            .iter()
+                            .map(|c| cell(row.get(c.key).unwrap_or(&serde_json::Value::Null))),
+                    );
                 }
             }
             builder.build().with(Style::rounded()).to_string()
@@ -87,8 +95,14 @@ mod tests {
 
     fn cols() -> Vec<Column> {
         vec![
-            Column { header: "Keyword", key: "keyword" },
-            Column { header: "Position", key: "position" },
+            Column {
+                header: "Keyword",
+                key: "keyword",
+            },
+            Column {
+                header: "Position",
+                key: "position",
+            },
         ]
     }
 
