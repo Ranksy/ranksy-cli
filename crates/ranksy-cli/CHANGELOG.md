@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.0](https://github.com/Ranksy/ranksy-cli/compare/v0.10.0...v0.11.0) (2026-10-27)
+
+
+### Features
+
+* ranksy ads sync pulls today by default and always refreshes it ([#26](https://github.com/Ranksy/ranksy-cli/issues/26)) ([27e6da7](https://github.com/Ranksy/ranksy-cli/commit/27e6da79d7e6879deeb89dc7edb3d8f1c7bf2c23))
+* read Shopify Ads performance with ranksy ads overview, trend, keywords and search-terms ([#24](https://github.com/Ranksy/ranksy-cli/issues/24)) ([0813a89](https://github.com/Ranksy/ranksy-cli/commit/0813a8976dfdb0300fd10abe9f32671bbc3bfd52))
+* show ad relevance and suggested bid range in ranksy ads keywords ([#25](https://github.com/Ranksy/ranksy-cli/issues/25)) ([b1440b1](https://github.com/Ranksy/ranksy-cli/commit/b1440b145dac03c8add2ff4b5870772c90de45ed))
+
 ## [0.10.0](https://github.com/Ranksy/ranksy-cli/compare/v0.9.1...v0.10.0) (2026-10-18)
 
 
