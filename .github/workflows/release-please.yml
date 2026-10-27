@@ -9,11 +9,16 @@ permissions:
   contents: write
   pull-requests: write
 
+# Runs must not overlap: one run merges the release PR, the next one tags it.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      # Bumps the version, writes the changelog, and opens/merges the release PR.
+      # Bumps the version, writes the changelog, and opens/updates the release PR.
       # GITHUB_TOKEN is fine here — this step doesn't need to trigger anything.
       - id: release
         uses: googleapis/release-please-action@v4
@@ -42,16 +47,41 @@ jobs:
         run: |
           TAG="v$(jq -r '."crates/ranksy-cli"' .release-please-manifest.json)"
           if gh api "/repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "$TAG already exists, nothing to release"
-            exit 0
+            echo "$TAG already exists"
+          else
+            gh api --method POST "/repos/$REPO/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$SHA"
           fi
-          gh api --method POST "/repos/$REPO/git/refs" \
-            -f ref="refs/tags/$TAG" \
-            -f sha="$SHA"
           # release-please won't open the next release PR while a merged one
-          # is still labelled "autorelease: pending".
+          # is still labelled "autorelease: pending". The manifest version is
+          # tagged by now, so every merged release PR is released: clear the
+          # label even when the tag already existed, or one missed run blocks
+          # all later releases.
           for pr in $(gh pr list --repo "$REPO" --state merged --label "autorelease: pending" --json number --jq '.[].number'); do
             gh pr edit "$pr" --repo "$REPO" \
               --remove-label "autorelease: pending" \
               --add-label "autorelease: tagged" || true
           done
+
+      # Merge the release PR right away, so merging a feat/fix PR publishes a
+      # release with no manual step. The merge must use the PAT: a push by
+      # GITHUB_TOKEN would not start the next run, which pushes the tag.
+      #
+      # Wait while the previous release is still building (its tag exists but
+      # its GitHub Release doesn't yet): release-please finds the last release
+      # through GitHub Releases, so until then the PR can hold the wrong version.
+      # The next push to main, or a manual run, merges it once the build is done.
+      - name: Merge release PR
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ fromJSON(steps.release.outputs.pr).number }}
+        run: |
+          TAG="v$(jq -r '."crates/ranksy-cli"' .release-please-manifest.json)"
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$TAG is still being released, leaving release PR #$PR open"
+            exit 0
+          fi
+          gh pr merge "$PR" --repo "$REPO" --squash
