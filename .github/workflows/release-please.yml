@@ -4,18 +4,26 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  # A release PR left open while the previous release was building gets
+  # merged as soon as that build finishes.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
-# Runs must not overlap: one run merges the release PR, the next one tags it.
+# Runs must not overlap, or two runs could merge or tag the same release.
 concurrency:
   group: release-please
   cancel-in-progress: false
 
 jobs:
   release-please:
+    # Release also runs on pull requests (cargo-dist plan); only tag builds count.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     steps:
       # Bumps the version, writes the changelog, and opens/updates the release PR.
@@ -42,6 +50,7 @@ jobs:
       - name: Create release tag
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
@@ -57,31 +66,47 @@ jobs:
           # is still labelled "autorelease: pending". The manifest version is
           # tagged by now, so every merged release PR is released: clear the
           # label even when the tag already existed, or one missed run blocks
-          # all later releases.
+          # all later releases. Labels need GITHUB_TOKEN: the PAT has no
+          # pull request access.
+          export GH_TOKEN="$LABEL_TOKEN"
           for pr in $(gh pr list --repo "$REPO" --state merged --label "autorelease: pending" --json number --jq '.[].number'); do
-            gh pr edit "$pr" --repo "$REPO" \
-              --remove-label "autorelease: pending" \
-              --add-label "autorelease: tagged" || true
+            # REST, not gh pr edit: that fails on the retired classic Projects API.
+            gh api --method DELETE "/repos/$REPO/issues/$pr/labels/autorelease:%20pending" >/dev/null || true
+            gh api --method POST "/repos/$REPO/issues/$pr/labels" -f "labels[]=autorelease: tagged" >/dev/null || true
           done
 
-      # Merge the release PR right away, so merging a feat/fix PR publishes a
-      # release with no manual step. The merge must use the PAT: a push by
-      # GITHUB_TOKEN would not start the next run, which pushes the tag.
+      # Merge the release PR right away and tag the merge commit, so merging a
+      # feat/fix PR publishes a release with no manual step. The merge uses
+      # GITHUB_TOKEN (the PAT has no pull request access); the tag uses the PAT
+      # so it starts the Release build.
       #
       # Wait while the previous release is still building (its tag exists but
       # its GitHub Release doesn't yet): release-please finds the last release
       # through GitHub Releases, so until then the PR can hold the wrong version.
-      # The next push to main, or a manual run, merges it once the build is done.
+      # This workflow runs again when that build finishes and merges it then.
       - name: Merge release PR
-        if: ${{ steps.release.outputs.pr }}
+        if: ${{ steps.release.outputs.pr != '' }}
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           REPO: ${{ github.repository }}
-          PR: ${{ fromJSON(steps.release.outputs.pr).number }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
         run: |
+          PR=$(jq -r '.number // empty' <<<"$PR_JSON" 2>/dev/null || true)
+          if [ -z "$PR" ] || [ "$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)" != "OPEN" ]; then
+            echo "No open release PR"
+            exit 0
+          fi
           TAG="v$(jq -r '."crates/ranksy-cli"' .release-please-manifest.json)"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "$TAG is still being released, leaving release PR #$PR open"
             exit 0
           fi
           gh pr merge "$PR" --repo "$REPO" --squash
+          MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit --jq .mergeCommit.oid)
+          NEW_TAG="v$(gh api "/repos/$REPO/contents/.release-please-manifest.json?ref=$MERGE_SHA" --jq .content | base64 -d | jq -r '."crates/ranksy-cli"')"
+          GH_TOKEN="$TAG_TOKEN" gh api --method POST "/repos/$REPO/git/refs" \
+            -f ref="refs/tags/$NEW_TAG" \
+            -f sha="$MERGE_SHA"
+          gh api --method DELETE "/repos/$REPO/issues/$PR/labels/autorelease:%20pending" >/dev/null || true
+          gh api --method POST "/repos/$REPO/issues/$PR/labels" -f "labels[]=autorelease: tagged" >/dev/null || true
