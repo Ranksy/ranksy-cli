@@ -104,6 +104,61 @@ pub async fn ensure_running(opts: &ChromeOptions, start_url: &str) -> Result<boo
     );
 }
 
+/// How long a command waits for another `ranksy ads` command to finish with Chrome.
+const PORT_LOCK_WAIT: Duration = Duration::from_secs(600);
+
+/// Held while a command drives the Chrome on a debug port. Two commands sharing one Chrome
+/// would drive the same Partners tab, and the one that started Chrome quits it when it
+/// finishes, killing the other mid-sync. The OS releases the lock when the process exits.
+pub struct PortLock {
+    _file: std::fs::File,
+}
+
+/// Takes the lock for `port`, waiting (up to 10 minutes) while another command holds it.
+pub async fn lock_port(port: u16) -> Result<PortLock> {
+    let path = super::project_dirs()
+        .map_or_else(|| PathBuf::from(".ranksy"), |d| d.data_dir().to_path_buf())
+        .join(format!("chrome-{port}.lock"));
+    lock_file(&path, port, PORT_LOCK_WAIT).await
+}
+
+async fn lock_file(path: &Path, port: u16, wait: Duration) -> Result<PortLock> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("cannot open lock file {}", path.display()))?;
+
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut told = false;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(PortLock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("cannot lock {}", path.display()))
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "another `ranksy ads` command is still using Chrome on port {port}. Wait for it to finish, or pass --port to use a separate Chrome."
+            );
+        }
+        if !told {
+            eprintln!(
+                "Another `ranksy ads` command is using Chrome on port {port}; waiting for it to finish (up to {} minutes)…",
+                wait.as_secs() / 60
+            );
+            told = true;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
 /// Chrome's command-line for the dedicated Partners profile.
 pub fn launch_args(
     profile: &Path,
@@ -277,6 +332,24 @@ fn pick_tab(list: &[Value], launched: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_second_command_on_the_same_port_waits_then_gives_up() {
+        let dir = std::env::temp_dir().join(format!("ranksy-lock-{}", std::process::id()));
+        let path = dir.join("chrome-9333.lock");
+        let held = lock_file(&path, 9333, Duration::ZERO).await.unwrap();
+
+        let err = lock_file(&path, 9333, Duration::ZERO)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("port 9333"), "{err}");
+
+        drop(held);
+        assert!(lock_file(&path, 9333, Duration::ZERO).await.is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use serde_json::json;
 
     #[test]

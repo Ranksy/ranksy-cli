@@ -304,7 +304,7 @@ pub enum AdsCmd {
         /// Pull and build the payloads, write them to --out, but don't POST to Ranksy.
         #[arg(long)]
         dry_run: bool,
-        /// Reuse days already pulled into --out instead of pulling them again (today is always pulled again).
+        /// Reuse days already pulled into --out instead of pulling them again. Only a pull made at least 48 hours after the day ended (UTC) is reused; anything newer is pulled again.
         #[arg(long)]
         resume: bool,
         /// Directory for the raw day exports and payload files, one subfolder per organization (default: `<cache dir>/ads-export`).

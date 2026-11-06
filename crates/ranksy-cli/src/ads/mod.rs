@@ -106,6 +106,7 @@ pub async fn run(cmd: &AdsCmd, ctx: Ctx) -> Result<()> {
                 ..chrome_options(chrome, Some(&ads))
             };
 
+            let _lock = chrome::lock_port(chrome.port).await?;
             sync::run(&ctx, &ads, chrome, &opts, &orgs).await
         }
     }

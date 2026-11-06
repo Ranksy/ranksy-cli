@@ -23,6 +23,8 @@ pub struct RanksyApp {
 pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) -> Result<()> {
     let existing = ctx.file.ads.clone();
     let opts = chrome_options(chrome_args, existing.as_ref());
+    // Held through the optional first sync, which runs in this process.
+    let _lock = chrome::lock_port(opts.port).await?;
 
     // Check the API key and list the Ranksy apps before opening a browser.
     let client = ctx.client()?;

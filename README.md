@@ -42,7 +42,9 @@ ranksy --app 01HZX9ABCDEF keywords list --json | jq '.data[0].organic_rank'
 by default today (UTC, partial so far) and the 3 days before. It is safe to run
 as often as you like, for example hourly from cron: each campaign-day is
 replaced in Ranksy, so a re-run or an overlapping range refreshes the numbers
-and never adds duplicate rows. `--resume` never reuses a cached pull of today. To
+and never adds duplicate rows. `--resume` only reuses a cached day that was
+pulled at least 48 hours after the day ended (UTC), so it never pushes the
+partial numbers of a day pulled while it was still running or settling. To
 backfill just one app, add `--only-app` (Ranksy app id, Shopify app id, or app
 name; repeat it for several): `ranksy ads sync --only-app "My App" --from 2025-11-01 --to 2025-12-20`.
 The daily campaign list is still pulled for the whole organization, but other
