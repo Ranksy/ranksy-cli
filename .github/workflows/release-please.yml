@@ -14,6 +14,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Listing Release runs to tell a build in progress from a failed one.
+  actions: read
 
 # Runs must not overlap, or two runs could merge or tag the same release.
 concurrency:
@@ -22,8 +24,9 @@ concurrency:
 
 jobs:
   release-please:
-    # Release also runs on pull requests (cargo-dist plan); only tag builds count.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'push' }}
+    # Release also runs on pull requests (cargo-dist plan); only tag builds count:
+    # tag pushes, and builds re-run by hand with `gh workflow run release.yml -f tag=...`.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       # Bumps the version, writes the changelog, and opens/updates the release PR.
@@ -84,6 +87,10 @@ jobs:
       # its GitHub Release doesn't yet): release-please finds the last release
       # through GitHub Releases, so until then the PR can hold the wrong version.
       # This workflow runs again when that build finishes and merges it then.
+      #
+      # If that build failed (or never started), the release would never exist
+      # and the release PR would wait forever. Fail this job instead, so the run
+      # shows red, and say once on the release PR how to rebuild the tag.
       - name: Merge release PR
         if: ${{ steps.release.outputs.pr != '' }}
         env:
@@ -99,8 +106,30 @@ jobs:
           fi
           TAG="v$(jq -r '."crates/ranksy-cli"' .release-please-manifest.json)"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "$TAG is still being released, leaving release PR #$PR open"
-            exit 0
+            RUNS=$(gh run list --repo "$REPO" --workflow release.yml --limit 50 \
+              --json status,conclusion,headBranch,event,url)
+            BUILDING=$(jq --arg tag "$TAG" '[.[] | select(.status != "completed" and (.headBranch == $tag or .event == "workflow_dispatch"))] | length' <<<"$RUNS")
+            if [ "$BUILDING" != "0" ]; then
+              echo "$TAG is still being released, leaving release PR #$PR open"
+              exit 0
+            fi
+            LAST=$(jq -r --arg tag "$TAG" '[.[] | select(.headBranch == $tag)][0] | if . then "\(.conclusion) \(.url)" else "" end' <<<"$RUNS")
+            if [ -z "$LAST" ]; then
+              # A tag pushed moments ago may not have its run listed yet.
+              TAGGED=$(gh api "/repos/$REPO/commits/$TAG" --jq .commit.committer.date)
+              if [ $(( $(date +%s) - $(date -d "$TAGGED" +%s) )) -lt 900 ]; then
+                echo "$TAG was just tagged, leaving release PR #$PR open"
+                exit 0
+              fi
+            fi
+            MSG="The Release build for $TAG did not publish a GitHub Release (${LAST:-no build ran for the tag}). Release PR #$PR stays open until it does. Rebuild with: gh workflow run release.yml --repo $REPO -f tag=$TAG"
+            echo "::error::$MSG"
+            MARKER="<!-- release-stuck:$TAG -->"
+            if ! gh api "/repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body' | grep -qF "$MARKER"; then
+              gh api --method POST "/repos/$REPO/issues/$PR/comments" -f body="$MSG
+          $MARKER" >/dev/null || true
+            fi
+            exit 1
           fi
           gh pr merge "$PR" --repo "$REPO" --squash
           MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit --jq .mergeCommit.oid)
