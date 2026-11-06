@@ -106,7 +106,6 @@ pub struct Resolved {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Parse variant is part of the public config API
 pub enum ConfigError {
     MissingKey,
     Io(std::io::Error),
@@ -156,12 +155,10 @@ pub fn config_path() -> PathBuf {
     }
 }
 
-pub fn load() -> ConfigFile {
-    let path = config_path();
-    match std::fs::read_to_string(&path) {
-        Ok(s) => toml::from_str(&s).unwrap_or_default(),
-        Err(_) => ConfigFile::default(),
-    }
+/// The config file, empty when there is none. A file that exists but can't be read or
+/// parsed is an error, so callers can say why instead of "no API key found".
+pub fn load() -> Result<ConfigFile, ConfigError> {
+    load_for_update(&config_path())
 }
 
 /// Reads the config for a read-modify-write: a missing file is empty, but a file that
@@ -176,14 +173,54 @@ fn load_for_update(path: &Path) -> Result<ConfigFile, ConfigError> {
     }
 }
 
-/// Serializes `file` to `path` (0600 on unix), creating the directory if needed.
+/// Serializes `file` to `path` (0600 on unix), creating the directory if needed. Writes a
+/// 0600 temp file next to it and renames it over `path`, so readers never see a half-written
+/// file and the API key is never readable by others, not even for a moment.
 fn write_file(path: &Path, file: &ConfigFile) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
-    }
+    use std::io::Write;
+
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(ConfigError::Io)?;
     let body = toml::to_string(file).map_err(|e| ConfigError::Parse(e.to_string()))?;
-    std::fs::write(path, body).map_err(ConfigError::Io)?;
-    set_permissions_0600(path)
+
+    let name = path
+        .file_name()
+        .map_or_else(|| "config.toml".into(), |n| n.to_string_lossy());
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let written = open_private(&tmp)
+        .and_then(|mut f| {
+            f.write_all(body.as_bytes())?;
+            f.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ConfigError::Io(e));
+    }
+
+    Ok(())
+}
+
+/// A new file that only the owner can read (0600 on unix), replacing a stale one.
+fn open_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    // `mode` only applies when the file is created; a leftover temp file keeps its own.
+    set_permissions_0600(path).map_err(|e| match e {
+        ConfigError::Io(e) => e,
+        other => std::io::Error::other(other.to_string()),
+    })?;
+
+    Ok(file)
 }
 
 pub fn save_api_key(key: &str) -> Result<(), ConfigError> {
@@ -195,10 +232,28 @@ pub fn save_api_key(key: &str) -> Result<(), ConfigError> {
 
 /// Replaces the `[ads]` table, leaving every other setting as it was.
 pub fn save_ads(ads: AdsConfig) -> Result<(), ConfigError> {
-    let path = config_path();
-    let mut file = load_for_update(&path)?;
-    file.ads = Some(ads);
-    write_file(&path, &file)
+    update_ads(|_| ads).map(|_| ())
+}
+
+/// Re-reads the config and replaces `[ads]` with `f(current [ads])`, so a long-running command
+/// (`ads connect` waits minutes for a login) builds on what is on disk now, not on what it
+/// read at startup. Returns the table it saved.
+pub fn update_ads(
+    f: impl FnOnce(Option<AdsConfig>) -> AdsConfig,
+) -> Result<AdsConfig, ConfigError> {
+    update_ads_at(&config_path(), f)
+}
+
+fn update_ads_at(
+    path: &Path,
+    f: impl FnOnce(Option<AdsConfig>) -> AdsConfig,
+) -> Result<AdsConfig, ConfigError> {
+    let mut file = load_for_update(path)?;
+    let ads = f(file.ads.take());
+    file.ads = Some(ads.clone());
+    write_file(path, &file)?;
+
+    Ok(ads)
 }
 
 #[cfg(unix)]
@@ -408,6 +463,52 @@ mod tests {
                 0o600
             );
         }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn update_ads_builds_on_the_file_as_it_is_now() {
+        let dir = std::env::temp_dir().join(format!("ranksy-config-upd-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Another command connected org 2 after this one read its snapshot.
+        std::fs::write(&path, "api_key = \"k\"\n[ads]\norgs = [\"1\", \"2\"]\n").unwrap();
+
+        let saved = update_ads_at(&path, |current| {
+            let mut ads = current.unwrap_or_default();
+            ads.add_org("3");
+            ads
+        })
+        .unwrap();
+        assert_eq!(saved.orgs, ["1", "2", "3"]);
+        let reread = load_for_update(&path).unwrap();
+        assert_eq!(reread.ads.unwrap().orgs, ["1", "2", "3"]);
+        assert_eq!(reread.api_key.as_deref(), Some("k"));
+        // No temp file is left behind.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_config_file_is_0600_even_with_a_stale_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ranksy-config-new-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join(format!(".config.toml.{}.tmp", std::process::id()));
+        std::fs::write(&stale, "junk").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_file(&path, &file()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(load_for_update(&path).unwrap(), file());
+        assert!(!stale.exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
