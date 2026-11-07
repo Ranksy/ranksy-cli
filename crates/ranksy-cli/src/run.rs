@@ -26,7 +26,12 @@ pub async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let file = config::load();
+    // A config file that doesn't parse is reported, not mistaken for "no API key": with
+    // --api-key or RANKSY_API_KEY the command still runs.
+    let file = config::load().unwrap_or_else(|e| {
+        eprintln!("warning: ignoring the config file: {e}");
+        config::ConfigFile::default()
+    });
 
     // ads connect/disconnect/sync resolve the key themselves: `ads sync --dry-run` works
     // without one. The ads read commands take the usual path below.

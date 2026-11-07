@@ -6,7 +6,7 @@ use super::payload::{self, AppPayload};
 use super::{log, partners, Ctx};
 use crate::config::{AdsApp, AdsConfig};
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use futures_util::{StreamExt, TryStreamExt};
 use ranksy_api::ApiError;
 use serde_json::{json, Value};
@@ -559,17 +559,18 @@ async fn pull_day_cached(
     resume: bool,
     only: Option<&[String]>,
 ) -> Result<Vec<Value>> {
-    if resume && is_final(day, chrono::Utc::now().date_naive()) {
+    if resume {
         if let Some(campaigns) = load_cached_day(out, day, only) {
             log(&format!("{day}: cached"));
             return Ok(campaigns);
         }
     }
 
+    let pulled_at = Utc::now();
     let campaigns = keep_apps(partners::pull_day(tab, org, day, only).await?, only);
     std::fs::write(
         day_file(out, day, only.is_some()),
-        day_json(org, day, &campaigns, only).to_string(),
+        day_json(org, day, &campaigns, only, pulled_at).to_string(),
     )?;
     let t = payload::summarize(&campaigns);
     log(&format!(
@@ -580,10 +581,20 @@ async fn pull_day_cached(
     Ok(campaigns)
 }
 
-/// Whether a day is over (before today, UTC), so a cached pull of it can be reused with
-/// `--resume`. Today (or a later day) is still changing and is always pulled again.
-fn is_final(day: &str, today: NaiveDate) -> bool {
-    NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok_and(|day| day < today)
+/// How long after a day ends (midnight UTC) its numbers may still change: Partners reports
+/// in the organization's timezone (up to UTC-12) and keeps adding late data for a while.
+/// A bare sync re-pulls the last 3 days, so this stays inside what it refreshes anyway.
+const SETTLE_AFTER: Duration = Duration::hours(48);
+
+/// Whether a pull of `day` made at `pulled_at` holds the day's final numbers, so `--resume`
+/// may reuse it. A pull made while the day was still in progress (or settling) never is.
+fn is_final(day: &str, pulled_at: DateTime<Utc>) -> bool {
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok_and(|day| {
+        let end = (day + Duration::days(1))
+            .and_time(chrono::NaiveTime::MIN)
+            .and_utc();
+        pulled_at >= end + SETTLE_AFTER
+    })
 }
 
 /// A day pulled for every app lives in `<day>.json`. A day pulled with `--only-app` lives in
@@ -597,8 +608,19 @@ fn day_file(dir: &Path, day: &str, filtered: bool) -> PathBuf {
     dir.join(format!("{day}.json"))
 }
 
-fn day_json(org: &str, day: &str, campaigns: &[Value], only: Option<&[String]>) -> Value {
-    let mut value = json!({ "day": day, "org": org, "campaigns": campaigns });
+fn day_json(
+    org: &str,
+    day: &str,
+    campaigns: &[Value],
+    only: Option<&[String]>,
+    pulled_at: DateTime<Utc>,
+) -> Value {
+    let mut value = json!({
+        "day": day,
+        "org": org,
+        "pulled_at": pulled_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "campaigns": campaigns,
+    });
     if let Some(keys) = only {
         value["apps"] = json!(keys);
     }
@@ -607,14 +629,30 @@ fn day_json(org: &str, day: &str, campaigns: &[Value], only: Option<&[String]>) 
 }
 
 /// The cached campaigns of a day for the wanted apps, or `None` when the day must be pulled.
-/// A full day serves any filter (narrowed in memory). A filtered day serves only a filter
-/// whose apps it all contains. Neither serves a request for all apps.
+/// Only a pull made after the day settled counts (see `is_final`); files written before the
+/// pull time was recorded never do. A full day serves any filter (narrowed in memory). A
+/// filtered day serves only a filter whose apps it all contains. Neither serves a request
+/// for all apps.
 fn load_cached_day(dir: &Path, day: &str, only: Option<&[String]>) -> Option<Vec<Value>> {
-    if let Some((None, campaigns)) = read_cached_day(&day_file(dir, day, false)) {
+    let read = |filtered| {
+        read_cached_day(&day_file(dir, day, filtered))
+            .filter(|c| c.pulled_at.is_some_and(|at| is_final(day, at)))
+    };
+    if let Some(CachedDay {
+        apps: None,
+        campaigns,
+        ..
+    }) = read(false)
+    {
         return Some(keep_apps(campaigns, only));
     }
     let wanted = only?;
-    let (Some(apps), campaigns) = read_cached_day(&day_file(dir, day, true))? else {
+    let CachedDay {
+        apps: Some(apps),
+        campaigns,
+        ..
+    } = read(true)?
+    else {
         return None;
     };
 
@@ -624,8 +662,15 @@ fn load_cached_day(dir: &Path, day: &str, only: Option<&[String]>) -> Option<Vec
         .then(|| keep_apps(campaigns, only))
 }
 
-/// `(apps the file was pulled for, campaigns)`; the apps are `None` in a full day.
-fn read_cached_day(file: &Path) -> Option<(Option<Vec<String>>, Vec<Value>)> {
+struct CachedDay {
+    /// The apps the file was pulled for; `None` in a full day.
+    apps: Option<Vec<String>>,
+    /// When the day was pulled; `None` in files written before it was recorded.
+    pulled_at: Option<DateTime<Utc>>,
+    campaigns: Vec<Value>,
+}
+
+fn read_cached_day(file: &Path) -> Option<CachedDay> {
     let text = std::fs::read_to_string(file).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
     let campaigns = value.get("campaigns").and_then(Value::as_array)?.clone();
@@ -636,7 +681,17 @@ fn read_cached_day(file: &Path) -> Option<(Option<Vec<String>>, Vec<Value>)> {
             .collect()
     });
 
-    Some((apps, campaigns))
+    let pulled_at = value
+        .get("pulled_at")
+        .and_then(Value::as_str)
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+
+    Some(CachedDay {
+        apps,
+        pulled_at,
+        campaigns,
+    })
 }
 
 /// Pushes payloads to Ranksy and remembers what happened. Failures are recorded, never
@@ -819,13 +874,19 @@ mod tests {
         assert!(first.iter().all(|day| overlap.contains(day)));
     }
 
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
     #[test]
-    fn only_days_before_today_are_reused_from_the_cache() {
-        let today = d("2026-10-16");
-        assert!(is_final("2026-10-15", today));
-        assert!(!is_final("2026-10-16", today));
-        assert!(!is_final("2026-10-17", today));
-        assert!(!is_final("not-a-day", today));
+    fn only_pulls_made_after_the_day_settled_are_final() {
+        // 2026-10-15 ends at 2026-10-16T00:00Z and settles 48 hours later.
+        assert!(is_final("2026-10-15", at("2026-10-18T00:00:00Z")));
+        assert!(is_final("2026-10-15", at("2026-11-01T09:00:00Z")));
+        assert!(!is_final("2026-10-15", at("2026-10-17T23:59:59Z")));
+        // Pulled while the day was still running.
+        assert!(!is_final("2026-10-15", at("2026-10-15T18:00:00Z")));
+        assert!(!is_final("not-a-day", at("2026-11-01T00:00:00Z")));
     }
 
     #[test]
@@ -1170,7 +1231,7 @@ mod tests {
     fn write_day(dir: &Path, day: &str, campaigns: &[Value], only: Option<&[String]>) {
         std::fs::write(
             day_file(dir, day, only.is_some()),
-            day_json("1", day, campaigns, only).to_string(),
+            day_json("1", day, campaigns, only, at("2026-10-30T06:00:00Z")).to_string(),
         )
         .unwrap();
     }
@@ -1242,15 +1303,45 @@ mod tests {
     }
 
     #[test]
-    fn a_cached_day_from_before_the_filter_existed_counts_as_full() {
+    fn a_cached_day_without_a_filter_counts_as_full() {
         let dir = cache_dir("legacy");
         std::fs::write(
             dir.join("2026-10-15.json"),
-            json!({ "day": "2026-10-15", "org": "1", "campaigns": [raw_campaign("1", "key-a", "A")] }).to_string(),
+            json!({ "day": "2026-10-15", "org": "1", "pulled_at": "2026-10-30T06:00:00Z", "campaigns": [raw_campaign("1", "key-a", "A")] }).to_string(),
         )
         .unwrap();
 
         assert!(load_cached_day(&dir, "2026-10-15", None).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_day_cached_while_in_progress_or_without_a_pull_time_is_pulled_again() {
+        let dir = cache_dir("partial");
+        let campaigns = [raw_campaign("1", "key-a", "A")];
+        // A normal sync pulled the day while it was still running.
+        std::fs::write(
+            day_file(&dir, "2026-10-15", false),
+            day_json(
+                "1",
+                "2026-10-15",
+                &campaigns,
+                None,
+                at("2026-10-15T18:00:00Z"),
+            )
+            .to_string(),
+        )
+        .unwrap();
+        assert!(load_cached_day(&dir, "2026-10-15", None).is_none());
+
+        // Written by a version that did not record the pull time.
+        std::fs::write(
+            day_file(&dir, "2026-10-14", false),
+            json!({ "day": "2026-10-14", "org": "1", "campaigns": campaigns }).to_string(),
+        )
+        .unwrap();
+        assert!(load_cached_day(&dir, "2026-10-14", None).is_none());
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

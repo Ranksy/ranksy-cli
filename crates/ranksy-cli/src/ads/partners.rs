@@ -17,6 +17,8 @@ pub const CONNECT_LOGIN_TIMEOUT_SECS: u64 = 600;
 pub const SYNC_LOGIN_TIMEOUT_SECS: u64 = 60;
 /// How long a headless sync waits for a usable session before opening a window instead.
 const HEADLESS_LOGIN_TIMEOUT_SECS: u64 = 30;
+/// How long the page may stay on another organization after switching to the wanted one.
+const ORG_SWITCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Org {
@@ -159,6 +161,7 @@ pub async fn wait_for_login(tab: &Tab, wait: LoginWait<'_>) -> Result<String> {
         .unwrap_or_else(|| ORGANIZATIONS_URL.to_string());
     let mut prompted = false;
     let mut chosen: Option<String> = wait.wanted_org.map(str::to_string);
+    let mut switched_at: Option<tokio::time::Instant> = None;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait.timeout_secs);
     for i in 0u32.. {
@@ -191,7 +194,23 @@ pub async fn wait_for_login(tab: &Tab, wait: LoginWait<'_>) -> Result<String> {
 
         match classify(href, csrf) {
             PageState::LoggedIn(found) => {
-                let org = chosen.clone().unwrap_or(found);
+                let org = chosen.clone().unwrap_or_else(|| found.clone());
+                if found != org {
+                    // Logged in, but to another organization: switch, then check the page
+                    // again instead of assuming the session can open `org`.
+                    match switched_at {
+                        None => {
+                            tab.navigate(&ads_url(&org)).await?;
+                            switched_at = Some(tokio::time::Instant::now());
+                        }
+                        Some(at) if at.elapsed() >= ORG_SWITCH_TIMEOUT => {
+                            bail!(org_switch_error(&org, &found, wait.interactive))
+                        }
+                        Some(_) => {}
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
                 if !href.starts_with(&ads_url(&org)) {
                     tab.navigate(&ads_url(&org)).await?;
                     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -226,6 +245,18 @@ pub async fn wait_for_login(tab: &Tab, wait: LoginWait<'_>) -> Result<String> {
         bail!("timed out waiting for the Partners login");
     }
     bail!("Partners session expired — run `ranksy ads connect`")
+}
+
+/// Why the session could not open the wanted organization.
+fn org_switch_error(wanted: &str, found: &str, interactive: bool) -> String {
+    let next = if interactive {
+        "Log in with a Partners account that belongs to it, or pass --org with an organization this account can open."
+    } else {
+        "Run `ranksy ads connect --org <id>` with a Partners account that belongs to it."
+    };
+    format!(
+        "Partners stayed on organization {found} instead of opening organization {wanted}. {next}"
+    )
 }
 
 fn pick_org(orgs: &[Org]) -> Result<String> {
@@ -431,6 +462,13 @@ mod tests {
         ] {
             assert!(INPAGE_JS.contains(&format!("function {f}(")), "{f} missing");
         }
+    }
+
+    #[test]
+    fn org_switch_error_names_both_orgs() {
+        let msg = org_switch_error("2", "1", false);
+        assert!(msg.contains("organization 1 instead of opening organization 2"));
+        assert!(msg.contains("ranksy ads connect --org"));
     }
 
     #[test]

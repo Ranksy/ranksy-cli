@@ -23,6 +23,8 @@ pub struct RanksyApp {
 pub async fn run(ctx: &Ctx, chrome_args: &ChromeArgs, org_flag: Option<&str>) -> Result<()> {
     let existing = ctx.file.ads.clone();
     let opts = chrome_options(chrome_args, existing.as_ref());
+    // Held through the optional first sync, which runs in this process.
+    let _lock = chrome::lock_port(opts.port).await?;
 
     // Check the API key and list the Ranksy apps before opening a browser.
     let client = ctx.client()?;
@@ -123,8 +125,11 @@ async fn login_and_map(
         choices.push((app, picked));
     }
 
-    let ads = build_ads_config(existing, &org, opts, &choices);
-    config::save_ads(ads.clone()).map_err(|e| anyhow!(e.to_string()))?;
+    // Build on the config as it is now: the login above can take minutes, and a
+    // `disconnect` or another `connect` may have saved in the meantime.
+    let ads =
+        config::update_ads(|current| build_ads_config(current.as_ref(), &org, opts, &choices))
+            .map_err(|e| anyhow!(e.to_string()))?;
     println!("\nSaved to {}", config::config_path().display());
     print_mapping(&choices);
 
@@ -260,20 +265,29 @@ fn print_mapping(choices: &[(PartnersApp, Option<RanksyApp>)]) {
     }
 }
 
+/// Safety stop for a server that keeps saying there is more: 100,000 apps.
+const MAX_APP_PAGES: u32 = 1000;
+
 /// Every Ranksy app visible to the key (proves the key works and has `apps:read`).
 async fn load_ranksy_apps(client: &RanksyClient) -> Result<Vec<RanksyApp>> {
     let mut apps = Vec::new();
-    for page in 1..20u32 {
+    for page in 1..=MAX_APP_PAGES {
         let response = client
             .list_apps_page(page, 100)
             .await
             .map_err(|e| ranksy_error(e, "could not list your Ranksy apps"))?;
-        apps.extend(parse_apps(&response));
-        if !has_more(&response, page) {
-            break;
+        let found = parse_apps(&response);
+        let empty = found.is_empty();
+        apps.extend(found);
+        if empty || !has_more(&response, page) {
+            return Ok(apps);
         }
     }
 
+    eprintln!(
+        "warning: stopped listing Ranksy apps after {MAX_APP_PAGES} pages ({} apps); apps after that are not offered.",
+        apps.len()
+    );
     Ok(apps)
 }
 
