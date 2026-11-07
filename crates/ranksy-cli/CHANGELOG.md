@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.1](https://github.com/Ranksy/ranksy-cli/compare/v0.11.0...v0.11.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* `ranksy ads connect` lists all your Ranksy apps, not just the first 1,900. ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+* `ranksy ads connect` no longer undoes a `disconnect` or `connect` made while it waited for the Partners login. ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+* `ranksy ads sync --resume` only reuses days pulled at least 48 hours after they ended, so it no longer overwrites complete ads numbers with partial ones. If you used `--resume` before, run a normal `ranksy ads sync --from <first day you resumed> --to <today>` once to correct days it may have overwritten. ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+* a Partners login to a different organization now gives a clear error when the wanted organization can't be opened. ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+* the config file is written atomically with 0600 permissions, and a config file that can't be parsed is reported instead of showing "no API key found". ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+* two `ranksy ads` commands no longer share one Chrome; the second waits for the first to finish. ([263d97c](https://github.com/Ranksy/ranksy-cli/commit/263d97ccb8eecfa168f95ed16dafa6b9bd5f1da8))
+
 ## [0.11.0](https://github.com/Ranksy/ranksy-cli/compare/v0.10.0...v0.11.0) (2026-10-27)
 
 
