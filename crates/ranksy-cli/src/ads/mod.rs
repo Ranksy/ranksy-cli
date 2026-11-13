@@ -181,12 +181,15 @@ fn log(msg: &str) {
 
 /// A readable error for a failed Ranksy call made while connecting.
 fn ranksy_error(e: ApiError, what: &str) -> anyhow::Error {
+    if let Some(forbidden) = crate::run::permission_error(&e) {
+        return forbidden;
+    }
     match e {
         ApiError::Status { code: 401, .. } => anyhow!(
             "Ranksy rejected the API key (401). Check `ranksy login`, RANKSY_API_KEY or --api-key."
         ),
         ApiError::Status { code: 403, .. } => {
-            anyhow!("The API key is missing a scope (403): it needs `apps:read` and `ads:write`.")
+            anyhow!("The API key can't list your apps (403). A key created before permissions needs the `apps:read` and `ads:write` scopes.")
         }
         other => anyhow!("{what}: {other}"),
     }

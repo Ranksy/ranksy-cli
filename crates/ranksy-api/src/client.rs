@@ -14,6 +14,22 @@ pub enum ApiError {
     Build(String),
 }
 
+impl ApiError {
+    /// The message of a `403 insufficient_permissions` error, which names the team permission
+    /// (or, on a key created before permissions, the scope) that the endpoint requires.
+    pub fn missing_permission(&self) -> Option<String> {
+        let ApiError::Status { code: 403, body } = self else {
+            return None;
+        };
+        let body: serde_json::Value = serde_json::from_str(body).ok()?;
+        let error = body.get("error")?;
+        if error.get("code")?.as_str()? != "insufficient_permissions" {
+            return None;
+        }
+        error.get("message")?.as_str().map(str::to_string)
+    }
+}
+
 pub struct ClientConfig {
     pub api_key: String,
     pub base_url: String,
@@ -305,6 +321,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Status { code: 403, ref body } if body == "missing scope"));
+        assert_eq!(err.missing_permission(), None);
+    }
+
+    #[test]
+    fn missing_permission_reads_the_api_message() {
+        let message = "This endpoint requires the 'revenue.churn' team permission, on the API key and on the member who created it.";
+        let forbidden = |code: u16, error_code: &str| {
+            ApiError::Status {
+            code,
+            body: serde_json::json!({ "error": { "type": "permission_error", "code": error_code, "message": message } }).to_string(),
+        }
+        };
+        assert_eq!(
+            forbidden(403, "insufficient_permissions")
+                .missing_permission()
+                .as_deref(),
+            Some(message)
+        );
+        assert_eq!(forbidden(403, "forbidden").missing_permission(), None);
+        assert_eq!(
+            forbidden(401, "insufficient_permissions").missing_permission(),
+            None
+        );
     }
 
     #[tokio::test]

@@ -81,6 +81,9 @@ pub async fn fetch(client: &RanksyClient, app: &str, cmd: &AdsCmd) -> Result<Val
 
 /// A readable error for the ads read endpoints.
 pub fn read_error(e: ApiError) -> anyhow::Error {
+    if let Some(forbidden) = crate::run::permission_error(&e) {
+        return forbidden;
+    }
     let ApiError::Status { code, body } = &e else {
         return e.into();
     };
@@ -94,7 +97,9 @@ pub fn read_error(e: ApiError) -> anyhow::Error {
         401 => anyhow!(
             "Ranksy rejected the API key (401). Check `ranksy login`, RANKSY_API_KEY or --api-key."
         ),
-        403 => anyhow!("The API key is missing a scope (403): the ads commands need `ads:read`."),
+        403 => anyhow!(
+            "The API key can't run this command (403): the ads commands need the `traffic.ads` permission, or the `ads:read` scope on a key created before permissions."
+        ),
         404 if error.get("param").and_then(Value::as_str) == Some("campaign") => anyhow!(
             "Campaign not found: {}",
             message.unwrap_or("this app has no campaign with that Shopify campaign id or name.")
@@ -682,12 +687,22 @@ mod tests {
     }
 
     #[test]
-    fn maps_forbidden_to_the_missing_scope() {
+    fn maps_forbidden_to_the_missing_permission() {
         let e = read_error(status(
             403,
             json!({"error": {"code": "insufficient_permissions"}}),
         ));
+        assert!(e.to_string().contains("`traffic.ads`"), "{e}");
         assert!(e.to_string().contains("`ads:read`"), "{e}");
+
+        let e = read_error(status(
+            403,
+            json!({"error": {"code": "insufficient_permissions", "message": "This endpoint requires the 'traffic.ads' team permission, on the API key and on the member who created it."}}),
+        ));
+        assert_eq!(
+            e.to_string(),
+            "The API key can't run this command (403): This endpoint requires the 'traffic.ads' team permission, on the API key and on the member who created it."
+        );
     }
 
     #[test]

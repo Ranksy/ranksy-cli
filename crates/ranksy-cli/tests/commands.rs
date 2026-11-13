@@ -350,3 +350,28 @@ fn ads_read_rejects_an_unknown_ad_type_before_calling() {
     );
     assert_eq!(out.status.code(), Some(2));
 }
+
+#[tokio::test]
+async fn forbidden_prints_the_missing_permission() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/apps/app_123/churned-customers"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {
+                "type": "permission_error",
+                "code": "insufficient_permissions",
+                "message": "This endpoint requires the 'revenue.churn' team permission, on the API key and on the member who created it.",
+                "doc_url": "https://api.ranksyapp.com/errors#insufficient_permissions"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let out = ranksy(&server.uri(), &["--app", "app_123", "churned-customers"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        err.trim(),
+        "error: The API key can't run this command (403): This endpoint requires the 'revenue.churn' team permission, on the API key and on the member who created it."
+    );
+}
