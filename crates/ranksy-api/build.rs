@@ -7,8 +7,10 @@ fn main() {
     let file = fs::File::open(spec_path).expect("open openapi.json");
     let spec: openapiv3::OpenAPI = serde_json::from_reader(file).expect("parse openapi.json");
 
-    let mut generator = progenitor::Generator::default();
-    let tokens = generator.generate_tokens(&spec).expect("generate client");
+    let generator =
+        progenitor::Generator::build(&progenitor::GenerationSettings::default(), &spec)
+            .expect("generate client");
+    let tokens = generator.generate_sdk().into_stream();
     let ast = syn::parse2(tokens).expect("parse generated tokens");
     let code = prettyplease::unparse(&ast);
 

@@ -11,11 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
-directories = "5"
+directories = "6"
 dotenvy = "0.15"
-toml = "0.8"
+toml = "1"
 serde = { version = "1", features = ["derive"] }
-tabled = "0.16"
+tabled = "0.22"
 serde_json = "1"
 is-terminal = "0.4"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -27,7 +27,7 @@ futures-util = "0.3"
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Same build as ranksy-api's client; only used to talk to Chrome's local debug endpoint.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [dev-dependencies]
 wiremock = "0.6"
