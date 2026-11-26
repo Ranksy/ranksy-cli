@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/Ranksy/ranksy-cli/compare/v0.11.1...v0.12.0) (2026-11-26)
+
+
+### Features
+
+* list each command's team permission, and name the missing one on 403 (RAN-1011) ([#32](https://github.com/Ranksy/ranksy-cli/issues/32)) ([1500414](https://github.com/Ranksy/ranksy-cli/commit/1500414bd932144bd8a79a2b2f68f9b1c46d24ac))
+
+
+### Bug Fixes
+
+* **deps:** update every dependency to latest (RAN-1169) ([#34](https://github.com/Ranksy/ranksy-cli/issues/34)) ([3783c00](https://github.com/Ranksy/ranksy-cli/commit/3783c00534b71fd38eb4adb311fe2ae05337a426))
+
 ## [0.11.1](https://github.com/Ranksy/ranksy-cli/compare/v0.11.0...v0.11.1) (2026-11-07)
 
 
