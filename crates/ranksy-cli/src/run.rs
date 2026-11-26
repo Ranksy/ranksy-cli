@@ -1,7 +1,14 @@
 use crate::cli::{Cli, Commands};
 use crate::{config, output};
 use anyhow::{anyhow, Result};
-use ranksy_api::{ClientConfig, RanksyClient};
+use ranksy_api::{ApiError, ClientConfig, RanksyClient};
+
+/// A `403 insufficient_permissions` as the API's own message, which names the permission the
+/// key, or the member who created it, lacks.
+pub fn permission_error(e: &ApiError) -> Option<anyhow::Error> {
+    e.missing_permission()
+        .map(|message| anyhow!("The API key can't run this command (403): {message}"))
+}
 
 pub async fn run(cli: Cli) -> Result<()> {
     // login writes config and returns before any auth resolution.
@@ -70,7 +77,13 @@ pub async fn run(cli: Cli) -> Result<()> {
     let app = resolved.app.clone();
 
     loop {
-        let (value, columns) = dispatch(&client, &cli.command, app.as_deref()).await?;
+        let (value, columns) = dispatch(&client, &cli.command, app.as_deref())
+            .await
+            .map_err(|e| {
+                e.downcast_ref::<ApiError>()
+                    .and_then(permission_error)
+                    .unwrap_or(e)
+            })?;
         let text = match (&cli.command, format) {
             (Commands::Ads { cmd }, output::Format::Table) => {
                 crate::ads::report::table(cmd, &value)

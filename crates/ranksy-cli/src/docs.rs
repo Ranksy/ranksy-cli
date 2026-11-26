@@ -1,8 +1,8 @@
 //! `ranksy docs markdown`: the command reference published at api.ranksyapp.com/cli/commands.
 //!
 //! It is built from the clap definitions, so flags, defaults and help text can't drift from the
-//! binary. What clap doesn't know, the API endpoint and scope behind each command, lives in
-//! `REFERENCE`; a test fails when a command has no entry there.
+//! binary. What clap doesn't know, the API endpoint, team permission and older-key scope behind
+//! each command, lives in `REFERENCE`; a test fails when a command has no entry there.
 
 use crate::cli::Cli;
 use clap::{Arg, ArgAction, Command, CommandFactory};
@@ -15,6 +15,13 @@ struct Ref {
     command: &'static str,
     /// HTTP method and path, or `None` when the command makes no API call.
     endpoint: Option<(&'static str, &'static str)>,
+    /// The team permission of the endpoint, per "Permissions by endpoint" on /authentication.
+    /// `None` when any valid key may call it.
+    permission: Option<&'static str>,
+    /// The endpoint returns dollar amounts per row, so it also needs `revenue.overview` or
+    /// `revenue.earnings`.
+    revenue: bool,
+    /// The scope that keys created before permissions need.
     scope: Option<&'static str>,
     /// Title and link of the endpoint's section on api.ranksyapp.com.
     docs: Option<(&'static str, &'static str)>,
@@ -25,12 +32,15 @@ const fn api(
     command: &'static str,
     method: &'static str,
     path: &'static str,
+    permission: Option<&'static str>,
     scope: &'static str,
     docs: Option<(&'static str, &'static str)>,
 ) -> Ref {
     Ref {
         command,
         endpoint: Some((method, path)),
+        permission,
+        revenue: false,
         scope: Some(scope),
         docs,
         note: None,
@@ -41,6 +51,8 @@ const fn local(command: &'static str, note: &'static str) -> Ref {
     Ref {
         command,
         endpoint: None,
+        permission: None,
+        revenue: false,
         scope: None,
         docs: None,
         note: Some(note),
@@ -54,65 +66,75 @@ const fn with_note(r: Ref, note: &'static str) -> Ref {
     }
 }
 
+const fn plus_revenue(r: Ref) -> Ref {
+    Ref { revenue: true, ..r }
+}
+
+const NONE: Option<&str> = None;
+const ASO_KEYWORDS: Option<&str> = Some("aso.keywords");
+const ASO_TRACKED: Option<&str> = Some("aso.tracked");
+const TRAFFIC_SOURCES: Option<&str> = Some("traffic.sources");
+const TRAFFIC_ATTRIBUTION: Option<&str> = Some("traffic.attribution");
+const TRAFFIC_ADS: Option<&str> = Some("traffic.ads");
+
 const LIST_APPS: Option<(&str, &str)> = Some(("List apps", "/apps#list-apps"));
 const ADS_GUIDE: Option<(&str, &str)> = Some(("Sync App Store Ads", "/cli/ads"));
-const ADS_REVENUE: &str =
-    "Revenue and ROAS also need `metrics:read`; without it the table leaves those columns out.";
+const ADS_REVENUE: &str = "On a key created before permissions, revenue and ROAS also need the `metrics:read` scope; without it the table leaves those columns out.";
 
 const REFERENCE: &[Ref] = &[
     local("login", "Writes the key to the config file. Makes no API call."),
-    api("whoami", "GET", "/api/v1/apps", "apps:read", LIST_APPS),
-    api("apps list", "GET", "/api/v1/apps", "apps:read", LIST_APPS),
+    api("whoami", "GET", "/api/v1/apps", NONE, "apps:read", LIST_APPS),
+    api("apps list", "GET", "/api/v1/apps", NONE, "apps:read", LIST_APPS),
     with_note(
-        api("rankings get", "GET", "/api/v1/apps/:app/rankings", "rankings:read", Some(("Current rankings", "/rankings#current-rankings"))),
+        api("rankings get", "GET", "/api/v1/apps/:app/rankings", ASO_KEYWORDS, "rankings:read", Some(("Current rankings", "/rankings#current-rankings"))),
         "With `--keyword`, it calls `GET /api/v1/apps/:app/rankings/by-keyword/:keyword` instead.",
     ),
-    api("rankings by-keyword", "GET", "/api/v1/apps/:app/rankings/by-keyword/:keyword", "rankings:read", None),
-    api("keywords list", "GET", "/api/v1/apps/:app/keywords", "traffic:read", Some(("Keyword performance", "/traffic#keyword-performance"))),
-    api("keywords track", "POST", "/api/v1/apps/:app/keywords", "keywords:write", None),
+    api("rankings by-keyword", "GET", "/api/v1/apps/:app/rankings/by-keyword/:keyword", ASO_KEYWORDS, "rankings:read", None),
+    api("keywords list", "GET", "/api/v1/apps/:app/keywords", ASO_KEYWORDS, "traffic:read", Some(("Keyword performance", "/traffic#keyword-performance"))),
+    api("keywords track", "POST", "/api/v1/apps/:app/keywords", ASO_TRACKED, "keywords:write", None),
     with_note(
-        api("keywords untrack", "DELETE", "/api/v1/apps/:app/keywords/:keyword", "keywords:write", None),
+        api("keywords untrack", "DELETE", "/api/v1/apps/:app/keywords/:keyword", ASO_TRACKED, "keywords:write", None),
         "The keyword is turned into its slug before the call, so `\"Email Marketing\"` and `email-marketing` both work.",
     ),
-    api("keywords cannibalization", "GET", "/api/v1/apps/:app/keywords/cannibalization", "traffic:read", None),
-    api("keywords ad-performance", "GET", "/api/v1/apps/:app/keywords/ad-performance", "traffic:read", None),
-    api("keywords installs-by-source", "GET", "/api/v1/apps/:app/keywords/installs-by-source", "traffic:read", None),
-    api("keywords trends", "GET", "/api/v1/apps/:app/keywords/:keyword/trends", "traffic:read", None),
-    api("reviews list", "GET", "/api/v1/apps/:app/reviews", "reviews:read", Some(("App Store reviews", "/reviews#app-store-reviews"))),
-    api("installs get", "GET", "/api/v1/apps/:app/installs", "traffic:read", Some(("Attributed installs", "/traffic#attributed-installs"))),
-    api("listing get", "GET", "/api/v1/apps/:app/listing", "apps:read", None),
-    api("retention-cohorts", "GET", "/api/v1/apps/:app/retention/cohorts", "metrics:read", None),
-    api("uninstall-reasons", "GET", "/api/v1/apps/:app/uninstall-reasons", "metrics:read", None),
-    api("active-trials", "GET", "/api/v1/apps/:app/active-trials", "metrics:read", None),
-    api("churned-customers", "GET", "/api/v1/apps/:app/churned-customers", "metrics:read", Some(("Churned customers", "/churned-customers#churned-customers"))),
-    api("store-installs", "GET", "/api/v1/apps/:app/store-installs", "metrics:read", Some(("Store installs", "/store-installs#store-installs"))),
-    api("lifecycle-events", "GET", "/api/v1/apps/:app/lifecycle-events", "metrics:read", Some(("Lifecycle events", "/lifecycle-events#lifecycle-events"))),
-    api("ltv customers", "GET", "/api/v1/apps/:app/ltv/customers", "metrics:read", Some(("Customer LTV", "/customer-ltv#customer-ltv"))),
-    api("ltv cohorts", "GET", "/api/v1/apps/:app/ltv/cohorts", "metrics:read", Some(("LTV cohorts", "/ltv-cohorts#ltv-cohorts"))),
-    api("traffic overview", "GET", "/api/v1/apps/:app/traffic/overview", "traffic:read", None),
-    api("traffic attribution", "GET", "/api/v1/apps/:app/traffic/attribution", "traffic:read", None),
-    api("traffic funnel", "GET", "/api/v1/apps/:app/traffic/funnel", "traffic:read", None),
-    api("traffic source-trends", "GET", "/api/v1/apps/:app/traffic/source-trends", "traffic:read", None),
+    api("keywords cannibalization", "GET", "/api/v1/apps/:app/keywords/cannibalization", TRAFFIC_ADS, "traffic:read", None),
+    api("keywords ad-performance", "GET", "/api/v1/apps/:app/keywords/ad-performance", TRAFFIC_ADS, "traffic:read", None),
+    api("keywords installs-by-source", "GET", "/api/v1/apps/:app/keywords/installs-by-source", TRAFFIC_ATTRIBUTION, "traffic:read", None),
+    api("keywords trends", "GET", "/api/v1/apps/:app/keywords/:keyword/trends", ASO_KEYWORDS, "traffic:read", None),
+    api("reviews list", "GET", "/api/v1/apps/:app/reviews", NONE, "reviews:read", Some(("App Store reviews", "/reviews#app-store-reviews"))),
+    api("installs get", "GET", "/api/v1/apps/:app/installs", TRAFFIC_ATTRIBUTION, "traffic:read", Some(("Attributed installs", "/traffic#attributed-installs"))),
+    api("listing get", "GET", "/api/v1/apps/:app/listing", NONE, "apps:read", None),
+    api("retention-cohorts", "GET", "/api/v1/apps/:app/retention/cohorts", Some("revenue.retention"), "metrics:read", None),
+    api("uninstall-reasons", "GET", "/api/v1/apps/:app/uninstall-reasons", Some("revenue.installations"), "metrics:read", None),
+    plus_revenue(api("active-trials", "GET", "/api/v1/apps/:app/active-trials", Some("revenue.trials"), "metrics:read", None)),
+    plus_revenue(api("churned-customers", "GET", "/api/v1/apps/:app/churned-customers", Some("revenue.churn"), "metrics:read", Some(("Churned customers", "/churned-customers#churned-customers")))),
+    api("store-installs", "GET", "/api/v1/apps/:app/store-installs", Some("revenue.installations"), "metrics:read", Some(("Store installs", "/store-installs#store-installs"))),
+    plus_revenue(api("lifecycle-events", "GET", "/api/v1/apps/:app/lifecycle-events", Some("revenue.subscriptions"), "metrics:read", Some(("Lifecycle events", "/lifecycle-events#lifecycle-events")))),
+    plus_revenue(api("ltv customers", "GET", "/api/v1/apps/:app/ltv/customers", Some("revenue.ltv"), "metrics:read", Some(("Customer LTV", "/customer-ltv#customer-ltv")))),
+    plus_revenue(api("ltv cohorts", "GET", "/api/v1/apps/:app/ltv/cohorts", Some("revenue.ltv"), "metrics:read", Some(("LTV cohorts", "/ltv-cohorts#ltv-cohorts")))),
+    api("traffic overview", "GET", "/api/v1/apps/:app/traffic/overview", TRAFFIC_SOURCES, "traffic:read", None),
+    plus_revenue(api("traffic attribution", "GET", "/api/v1/apps/:app/traffic/attribution", TRAFFIC_ATTRIBUTION, "traffic:read", None)),
+    api("traffic funnel", "GET", "/api/v1/apps/:app/traffic/funnel", TRAFFIC_ATTRIBUTION, "traffic:read", None),
+    api("traffic source-trends", "GET", "/api/v1/apps/:app/traffic/source-trends", TRAFFIC_SOURCES, "traffic:read", None),
     with_note(
-        api("ads overview", "GET", "/api/v1/apps/:app/shopify-ads/overview", "ads:read", Some(("Shopify Ads overview", "/shopify-ads#overview"))),
+        api("ads overview", "GET", "/api/v1/apps/:app/shopify-ads/overview", TRAFFIC_ADS, "ads:read", Some(("Shopify Ads overview", "/shopify-ads#overview"))),
         ADS_REVENUE,
     ),
     with_note(
-        api("ads trend", "GET", "/api/v1/apps/:app/shopify-ads/trend", "ads:read", Some(("Shopify Ads trend", "/shopify-ads#trend"))),
+        api("ads trend", "GET", "/api/v1/apps/:app/shopify-ads/trend", TRAFFIC_ADS, "ads:read", Some(("Shopify Ads trend", "/shopify-ads#trend"))),
         ADS_REVENUE,
     ),
     with_note(
-        api("ads keywords", "GET", "/api/v1/apps/:app/shopify-ads/keywords", "ads:read", Some(("Shopify Ads keywords", "/shopify-ads#keywords"))),
+        api("ads keywords", "GET", "/api/v1/apps/:app/shopify-ads/keywords", TRAFFIC_ADS, "ads:read", Some(("Shopify Ads keywords", "/shopify-ads#keywords"))),
         ADS_REVENUE,
     ),
-    api("ads search-terms", "GET", "/api/v1/apps/:app/shopify-ads/search-terms", "ads:read", Some(("Shopify Ads search terms", "/shopify-ads#search-terms"))),
+    api("ads search-terms", "GET", "/api/v1/apps/:app/shopify-ads/search-terms", TRAFFIC_ADS, "ads:read", Some(("Shopify Ads search terms", "/shopify-ads#search-terms"))),
     with_note(
-        api("ads connect", "GET", "/api/v1/apps", "apps:read", ADS_GUIDE),
-        "It lists your Ranksy apps so you can map each Shopify app to one. Give the same key `ads:write` too, for `ads sync`.",
+        api("ads connect", "GET", "/api/v1/apps", NONE, "apps:read", ADS_GUIDE),
+        "It lists your Ranksy apps so you can map each Shopify app to one. Give the same key `integrations.manage` too, for `ads sync` (on a key created before permissions, the `ads:write` scope).",
     ),
     local("ads disconnect", "Edits the config file. Makes no API call."),
     with_note(
-        api("ads sync", "POST", "/api/v1/apps/:app/shopify-ads/sync", "ads:write", ADS_GUIDE),
+        api("ads sync", "POST", "/api/v1/apps/:app/shopify-ads/sync", Some("integrations.manage"), "ads:write", ADS_GUIDE),
         "One call per mapped app for each chunk of days. With `--dry-run` it makes no API call and needs no key.",
     ),
     local("update", "Downloads the latest release from GitHub. Makes no Ranksy API call."),
@@ -178,9 +200,11 @@ fn push_command(out: &mut String, path: &str, mut cmd: Command) {
     }
 
     if let Some(r) = reference {
-        match r.scope {
-            Some(scope) => out.push_str(&format!("- Scope: [`{scope}`](/authentication#scopes)\n")),
-            None => out.push_str("- Scope: none\n"),
+        out.push_str(&permission_line(r));
+        if let Some(scope) = r.scope {
+            out.push_str(&format!(
+                "- Scope (older keys): [`{scope}`](/authentication#scopes)\n"
+            ));
         }
         match r.docs {
             // The CLI's own pages are guides, not endpoint references.
@@ -212,6 +236,24 @@ fn push_command(out: &mut String, path: &str, mut cmd: Command) {
     if !args.is_empty() {
         push_properties(out, args.into_iter());
     }
+}
+
+/// The `- Permission:` line of a command.
+fn permission_line(r: &Ref) -> String {
+    let Some(permission) = r.permission else {
+        if r.endpoint.is_none() {
+            return "- Permission: none\n".to_string();
+        }
+        return "- Permission: none, any valid key works\n".to_string();
+    };
+
+    let mut line =
+        format!("- Permission: [`{permission}`](/authentication#permissions-by-endpoint)");
+    if r.revenue {
+        line.push_str(", plus `revenue.overview` or `revenue.earnings`");
+    }
+    line.push('\n');
+    line
 }
 
 fn push_properties<'a>(out: &mut String, args: impl Iterator<Item = &'a Arg>) {
@@ -356,12 +398,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_endpoint_scope_usage_and_options() {
+    fn renders_endpoint_permission_scope_usage_and_options() {
         let md = markdown();
         assert!(md.contains(
             "## ranksy rankings get {{ tag: 'GET', label: '/api/v1/apps/:app/rankings' }}"
         ));
-        assert!(md.contains("- Scope: [`rankings:read`](/authentication#scopes)\n- API reference: [Current rankings](/rankings#current-rankings)"));
+        assert!(md.contains("- Permission: [`aso.keywords`](/authentication#permissions-by-endpoint)\n- Scope (older keys): [`rankings:read`](/authentication#scopes)\n- API reference: [Current rankings](/rankings#current-rankings)"));
         assert!(md.contains("```bash\nranksy rankings get [OPTIONS]\n```"));
         assert!(md.contains("<Property name=\"--keyword <KEYWORD>\" type=\"option\">"));
         assert!(md.contains("<Property name=\"--chunk-days <N>\" type=\"option\">"));
@@ -371,6 +413,15 @@ mod tests {
         assert!(md.contains("<Property name=\"-q, --quiet\" type=\"flag\">"));
         assert!(md.contains("<Property name=\"<KEY>\" type=\"argument\">"));
         assert!(md.contains("## ranksy ads disconnect\n\n"));
+    }
+
+    #[test]
+    fn renders_revenue_and_keyless_permissions() {
+        let md = markdown();
+        assert!(md.contains("- Permission: [`revenue.churn`](/authentication#permissions-by-endpoint), plus `revenue.overview` or `revenue.earnings`\n- Scope (older keys): [`metrics:read`](/authentication#scopes)\n"));
+        assert!(md.contains("- Permission: none, any valid key works\n- Scope (older keys): [`apps:read`](/authentication#scopes)\n"));
+        assert!(md.contains("## ranksy login\n\nSave an API key to the local config.\n\n- Permission: none\n- Writes"));
+        assert!(!md.contains("- Scope:"));
     }
 
     #[test]

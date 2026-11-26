@@ -216,7 +216,7 @@ pub struct AdsReportArgs {
 
 #[derive(Subcommand)]
 pub enum AdsCmd {
-    /// KPIs, funnel and one row per campaign for the period (needs `ads:read`).
+    /// KPIs, funnel and one row per campaign for the period (needs `traffic.ads`).
     Overview {
         #[command(flatten)]
         filters: AdsReportArgs,
@@ -224,7 +224,7 @@ pub enum AdsCmd {
         #[arg(long)]
         compare: bool,
     },
-    /// Ads performance per day or week (needs `ads:read`).
+    /// Ads performance per day or week (needs `traffic.ads`).
     Trend {
         #[command(flatten)]
         filters: AdsReportArgs,
@@ -232,7 +232,7 @@ pub enum AdsCmd {
         #[arg(long, value_parser = ["day", "week"])]
         grouping: Option<String>,
     },
-    /// Performance of the keywords you bid on; per campaign with --campaign (needs `ads:read`).
+    /// Performance of the keywords you bid on; per campaign with --campaign (needs `traffic.ads`).
     Keywords {
         #[command(flatten)]
         filters: AdsReportArgs,
@@ -243,7 +243,7 @@ pub enum AdsCmd {
         #[arg(long, value_parser = clap::value_parser!(i64).range(1..=200))]
         limit: Option<i64>,
     },
-    /// Searches that triggered your ads, by spend (needs `ads:read`).
+    /// Searches that triggered your ads, by spend (needs `traffic.ads`).
     SearchTerms {
         #[command(flatten)]
         filters: AdsReportArgs,
@@ -350,12 +350,12 @@ pub enum RankingsCmd {
 pub enum KeywordsCmd {
     /// Keywords the app ranks for, with organic and sponsored rank.
     List,
-    /// Start tracking a keyword (needs `keywords:write`).
+    /// Start tracking a keyword (needs `aso.tracked`).
     Track {
         /// Keyword text.
         keyword: String,
     },
-    /// Stop tracking a keyword; accepts the keyword text or its slug (needs `keywords:write`).
+    /// Stop tracking a keyword; accepts the keyword text or its slug (needs `aso.tracked`).
     Untrack {
         /// Keyword text or slug.
         keyword: String,
@@ -423,7 +423,7 @@ pub enum InstallsCmd {
 }
 #[derive(Subcommand)]
 pub enum ListingCmd {
-    /// Fetch the app's store listing (needs `apps:read`).
+    /// Fetch the app's store listing.
     Get,
 }
 #[derive(Subcommand)]

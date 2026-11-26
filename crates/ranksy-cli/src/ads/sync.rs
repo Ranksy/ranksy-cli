@@ -278,9 +278,12 @@ pub fn lookup_app<'a>(
 
 /// Human message for a failed sync POST, and whether retrying other batches for the app is pointless.
 pub fn describe_post_error(e: &ApiError) -> (String, bool) {
+    if let Some(message) = e.missing_permission() {
+        return (format!("{message} (403)"), true);
+    }
     match e {
         ApiError::Status { code: 401, .. } => ("Ranksy rejected the API key (401)".to_string(), true),
-        ApiError::Status { code: 403, .. } => ("the API key needs the `ads:write` and `apps:read` scopes, and its team must own the app (403)".to_string(), true),
+        ApiError::Status { code: 403, .. } => ("the API key, and the member who created it, need the `integrations.manage` permission (or, on a key created before permissions, the `ads:write` and `apps:read` scopes), and its team must own the app (403)".to_string(), true),
         ApiError::Status { code: 404, .. } => ("Ranksy app not found for this API key (404); run `ranksy ads connect` again".to_string(), true),
         ApiError::Status { code, body } => (format!("Ranksy returned {code}: {}", body.chars().take(500).collect::<String>()), false),
         other => (other.to_string(), false),
@@ -1346,12 +1349,19 @@ mod tests {
     }
 
     #[test]
-    fn forbidden_names_the_scopes_and_stops_the_app() {
+    fn forbidden_names_the_permission_and_stops_the_app() {
         let (msg, fatal) = describe_post_error(&ApiError::Status {
             code: 403,
             body: String::new(),
         });
+        assert!(msg.contains("integrations.manage"));
         assert!(msg.contains("ads:write") && msg.contains("apps:read"));
+        assert!(fatal);
+        let (msg, fatal) = describe_post_error(&ApiError::Status {
+            code: 403,
+            body: json!({ "error": { "code": "insufficient_permissions", "message": "This endpoint requires the 'integrations.manage' team permission, on the API key and on the member who created it." } }).to_string(),
+        });
+        assert_eq!(msg, "This endpoint requires the 'integrations.manage' team permission, on the API key and on the member who created it. (403)");
         assert!(fatal);
         let (msg, fatal) = describe_post_error(&ApiError::Status {
             code: 422,

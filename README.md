@@ -6,7 +6,8 @@ server: every command maps to an API endpoint and prints a table or JSON, so it
 fits bash, cron, and pipelines.
 
 **Full reference: [api.ranksyapp.com/cli](https://api.ranksyapp.com/cli)**:
-every command with its flags, API endpoint, and scope, plus the App Store ads
+every command with its flags, API endpoint, and the team permission your API
+key needs, plus the App Store ads
 sync guide.
 
 ## Install
@@ -54,9 +55,10 @@ suggested bid range, and each display campaign with its
 suggested bid range.
 
 Read the synced ads back with `ads overview`, `ads trend`, `ads keywords` and
-`ads search-terms` (key scope `ads:read`; revenue and ROAS also need
-`metrics:read`). All four take `--start-date`, `--end-date`, `--campaign`
-(Shopify campaign id or name) and `--ad-type`; the period defaults to the 30
+`ads search-terms` (key permission `traffic.ads`; on a key created before
+permissions, the `ads:read` scope, and `metrics:read` for revenue and ROAS).
+All four take `--start-date`, `--end-date`, `--campaign` (Shopify campaign id
+or name) and `--ad-type`; the period defaults to the 30
 days up to yesterday. With `--campaign`, `ads keywords` also shows each
 keyword's suggested bid range and ad relevance:
 
@@ -83,5 +85,5 @@ cargo run -q -p ranksy-cli -- docs markdown
 ```
 
 When you add or change a command, add it to `REFERENCE` in
-`crates/ranksy-cli/src/docs.rs` with its endpoint and scope. A test fails until
+`crates/ranksy-cli/src/docs.rs` with its endpoint, permission and scope. A test fails until
 you do.
