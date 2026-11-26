@@ -22,7 +22,8 @@ wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [build-dependencies]
-progenitor = "0.17"
+# Only the build-time generator; the `macro` feature (progenitor-macro) is unused.
+progenitor = { version = "0.17", default-features = false }
 openapiv3 = "2"
 serde_json = "1"
 syn = "3"
