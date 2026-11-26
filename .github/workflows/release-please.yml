@@ -32,7 +32,7 @@ jobs:
       # Bumps the version, writes the changelog, and opens/updates the release PR.
       # GITHUB_TOKEN is fine here — this step doesn't need to trigger anything.
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -49,7 +49,7 @@ jobs:
       # The tag MUST be pushed with a PAT / GitHub App token, not GITHUB_TOKEN:
       # GitHub blocks events authored by GITHUB_TOKEN from triggering other
       # workflows, so a GITHUB_TOKEN tag push would silently never start a build.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Create release tag
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
